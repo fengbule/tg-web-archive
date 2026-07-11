@@ -1,0 +1,10 @@
+.git
+.env
+.local
+.pytest_cache
+__pycache__
+*.pyc
+*.session*
+data
+tests
+
