@@ -21,6 +21,9 @@ def test_schema_and_duplicate():
         a,dup=q.enqueue(item); b,dup2=q.enqueue(item)
         assert a==b and not dup and dup2
         assert db.one('select file_name from downloads where id=?',(a,))['file_name']=='safe.mp4'
+        other,duplicate=q.enqueue({**item,'account_id':2})
+        assert other!=a and not duplicate
+        assert q.enqueue({**item,'account_id':2})==(other,True)
         assert 'telegram_message_id' in {x['name'] for x in db.all('pragma table_info(outbox)')}
         db.close()
 

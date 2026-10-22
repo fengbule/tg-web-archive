@@ -20,7 +20,9 @@ class Downloader:
             cur=self.db.execute('''INSERT INTO downloads(account_id,channel_id,message_id,channel_title,file_name,total_bytes,status,created_at,updated_at)
               VALUES(?,?,?,?,?,?,'queued',?,?)''',(account_id,int(item['channel_id']),int(item['message_id']),item.get('channel_title',''),safe,int(item.get('size',0)),t,t)); return cur.lastrowid,False
         except Exception:
-            old=self.db.one('SELECT id,status FROM downloads WHERE channel_id=? AND message_id=?',(int(item['channel_id']),int(item['message_id']))); return old['id'],True
+            old=self.db.one('SELECT id,status FROM downloads WHERE account_id=? AND channel_id=? AND message_id=?',(account_id,int(item['channel_id']),int(item['message_id'])))
+            if not old: raise
+            return old['id'],True
     async def worker(self,index):
         log.info('下载 worker 已启动 index=%s',index)
         while not self.stopping:

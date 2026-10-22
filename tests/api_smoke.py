@@ -52,8 +52,15 @@ with TestClient(app) as c:
     assert c.post('/api/settings/telegram-credentials/reveal',json={'password':'new-admin-password-456'}).status_code==200
     d=c.get('/api/dashboard'); assert d.status_code==200 and 'disk' in d.json()
     accounts=c.get('/api/accounts').json(); assert len(accounts)==1 and accounts[0]['active']
+    assert accounts[0]['authorized'] is False
+    assert c.post('/api/accounts',json={'label':'  '}).status_code==400
     added=c.post('/api/accounts',json={'label':'备用账号'}); assert added.status_code==200
     aid=added.json()['id']; assert len(c.get('/api/accounts').json())==2
+    assert c.patch(f'/api/accounts/{aid}',json={'label':'工作账号'}).status_code==200
+    assert c.patch(f'/api/accounts/{aid}',json={'label':'  '}).status_code==400
+    assert c.post('/api/accounts/999999/logout').status_code==404
+    assert c.post('/api/telegram/verify-password?account_id=999999',json={'password':'test'}).status_code==404
+    assert c.post(f'/api/accounts/{aid}/logout').json()['account_id']==aid
     assert c.post('/api/accounts/1/activate').status_code==200
     assert c.delete(f'/api/accounts/{aid}').status_code==200 and len(c.get('/api/accounts').json())==1
     media=root/'media'/'1'; media.mkdir(parents=True); f=media/'1_test.mp4'; f.write_bytes(b'0123456789')

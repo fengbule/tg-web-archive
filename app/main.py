@@ -151,11 +151,17 @@ def reset_view_password(body:AdminPasswordConfirm):
     if not check_admin_password(body.admin_password): raise HTTPException(403,'管理员密码错误')
     db.execute("DELETE FROM config WHERE key='credential_view_password_pbkdf2'"); return {'ok':True}
 @app.get('/api/accounts')
-def accounts(): return tg.list_accounts()
+async def accounts(): return await tg.list_accounts()
 class AccountCreate(BaseModel): label:str=Field(min_length=1,max_length=40)
 @app.post('/api/accounts')
 def account_create(b:AccountCreate):
+    if not b.label.strip(): raise HTTPException(400,'账号名称不能为空')
     aid=tg.create_account(b.label); tg.activate(aid); return {'id':aid,'active':True}
+@app.patch('/api/accounts/{account_id}')
+def account_rename(account_id:int,b:AccountCreate):
+    try: tg.rename_account(account_id,b.label)
+    except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True}
 @app.post('/api/accounts/{account_id}/activate')
 def account_activate(account_id:int):
     try: tg.activate(account_id)
@@ -165,7 +171,16 @@ def account_activate(account_id:int):
 async def account_delete(account_id:int):
     try: await tg.remove(account_id)
     except ValueError as e: raise HTTPException(400,str(e))
+    except Exception: raise HTTPException(502,'无法确认 Telegram 会话已结束，已保留账号和 Session，请稍后重试') from None
     return {'ok':True}
+@app.post('/api/accounts/{account_id}/logout')
+async def account_logout(account_id:int):
+    try: tg.service(account_id)
+    except ValueError as e: raise HTTPException(404,str(e))
+    try: await tg.logout(clear=True,account_id=account_id)
+    except ValueError as e: raise HTTPException(409,str(e))
+    except Exception: raise HTTPException(502,'无法确认 Telegram 会话已结束，已保留 Session，请稍后重试') from None
+    return {'ok':True,'account_id':account_id}
 class SendCode(BaseModel): phone:str; api_id:int|None=None; api_hash:str|None=None
 class QRStart(BaseModel):
     api_id:int|None=Field(default=None,gt=0)
@@ -198,16 +213,16 @@ async def qr_cancel(account_id:int|None=None):
     await qr_service(account_id).qr_login.cancel()
     return {'ok':True}
 @app.post('/api/telegram/send-code')
-async def send_code(b:SendCode):
-    await tg.send_code(b.phone,b.api_id,b.api_hash); return {'ok':True}
+async def send_code(b:SendCode,account_id:int|None=None):
+    await qr_service(account_id).send_code(b.phone,b.api_id,b.api_hash); return {'ok':True}
 class Code(BaseModel): code:str
 @app.post('/api/telegram/verify-code')
-async def verify_code(b:Code): return {'result':await tg.verify_code(b.code)}
+async def verify_code(b:Code,account_id:int|None=None): return {'result':await qr_service(account_id).verify_code(b.code)}
 class Password(BaseModel): password:str
 @app.post('/api/telegram/verify-password')
-async def verify_password(b:Password): await tg.verify_password(b.password); return {'ok':True}
+async def verify_password(b:Password,account_id:int|None=None): await qr_service(account_id).verify_password(b.password); return {'ok':True}
 @app.post('/api/telegram/logout')
-async def telegram_logout(clear:bool=False): await tg.logout(clear); return {'ok':True}
+async def telegram_logout(clear:bool=False,account_id:int|None=None): return await account_logout(account_id if account_id is not None else tg.active_id)
 @app.get('/api/channels')
 async def channels(q:str='',refresh:bool=False): return await tg.channels(q,refresh)
 @app.get('/api/channels/{channel_id}/videos')

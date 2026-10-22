@@ -3,11 +3,12 @@ let qrPollTimer=null, qrAccount=null, qrRun=0;
 function stopQrLogin(){
   clearTimeout(qrPollTimer); qrRun++;
   const account=qrAccount; qrAccount=null;
-  if(account!==null)api('/telegram/qr/cancel?account_id='+account,{method:'POST'}).catch(()=>{});
+  if(account!==null)return api('/telegram/qr/cancel?account_id='+account,{method:'POST'}).catch(()=>{});
 }
 
 function renderTelegramLogin(s){
   stopQrLogin();
+  const account=s.account_id;
   const fields=s.configured?`<p class="status">无需填写 API 凭据，可直接生成二维码。</p>${s.qr_test_mode?'<p class="muted">当前为测试登录模式，可能受到 Telegram 的登录限制。</p>':''}`:`<p><a href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">前往 Telegram 官方页面申请 API ID / API Hash</a></p><label>API ID<input id="inlineApiId" inputmode="numeric" required></label><label>API Hash<input id="inlineApiHash" type="password" required pattern="[a-fA-F0-9]{32}"></label>`;
   content.innerHTML=`<div class="card telegram-login-card"><h3>登录 Telegram 用户账号</h3><p class="muted">用已登录的手机 Telegram 扫码并确认。两步验证密码仅用于当次登录。</p><form id="tgInlineForm">${fields}<div class="actions"><button id="qrStartButton" type="button">生成登录二维码</button><button id="phoneModeButton" class="ghost" type="button">使用手机号验证码</button></div><div id="phoneLoginFields" hidden><label>手机号（含国家区号）<input id="inlinePhone" placeholder="例如：+8613800000000"></label><button>发送验证码</button></div></form><div id="qrLoginPanel" class="qr-login-panel" hidden><img id="qrLoginImage" alt="Telegram 登录二维码" hidden><p id="qrLoginStatus" role="status" aria-live="polite"></p><p class="muted">手机 Telegram → 设置 → 设备 → 连接桌面设备，扫描并确认。二维码会自动刷新，5 分钟后停止等待。</p><button id="qrCancelButton" class="ghost">取消扫码</button></div><div id="inlineError" class="error" role="alert"></div></div>`;
   $('#phoneModeButton').onclick=()=>{stopQrLogin();$('#qrLoginPanel').hidden=true;$('#qrLoginImage').removeAttribute('src');$('#phoneLoginFields').hidden=false;$('#inlinePhone').required=true;$('#inlinePhone').focus()};
@@ -20,7 +21,7 @@ function renderTelegramLogin(s){
   }
   $('#tgInlineForm').onsubmit=async e=>{
     e.preventDefault();stopQrLogin();let err=$('#inlineError');err.textContent='正在连接 Telegram，请稍候…';
-    try{await api('/telegram/send-code',{method:'POST',body:JSON.stringify({...telegramApiFields(),phone:$('#inlinePhone').value})},60000);telegramCodePage()}catch(x){err.textContent=x.message}
+    try{await api('/telegram/send-code?account_id='+account,{method:'POST',body:JSON.stringify({...telegramApiFields(),phone:$('#inlinePhone').value})},60000);telegramCodePage(account)}catch(x){err.textContent=x.message}
   };
 }
 
@@ -45,7 +46,7 @@ async function startQrLogin(){
 function renderQrState(s,run,account){
   if(run!==qrRun || activePage!=='telegram' || +$('#accountSelector').value!==account)return;
   if(s.state==='authorized'){stopQrLogin();toast('Telegram 扫码登录成功');go('channels');return}
-  if(s.state==='password_needed'){stopQrLogin();telegramPasswordPage();return}
+  if(s.state==='password_needed'){stopQrLogin();telegramPasswordPage(account);return}
   const image=$('#qrLoginImage'),status=$('#qrLoginStatus');
   if(s.state==='waiting'){
     if(image.getAttribute('src')!==s.image)image.src=s.image;

@@ -2,7 +2,7 @@ import asyncio, logging, time, uuid, os, re
 from pathlib import Path
 from telethon import TelegramClient
 from telethon import utils
-from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError, FloodWaitError
+from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError, FloodWaitError, UnauthorizedError
 from telethon.tl.types import Channel, Chat, User
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
@@ -15,7 +15,7 @@ class TelegramAccountService:
     def __init__(self,account_id:int,session_name:str,session_dir:Path,thumb_dir:Path,db,cipher):
         self.account_id=account_id; self.session_name=session_name; self.session_dir=session_dir; self.thumb_dir=thumb_dir
         self.db=db; self.cipher=cipher; self.client=None; self.phone=''; self.phone_code_hash=''; self.lock=asyncio.Lock(); self.channels_cache=[]; self.channels_cached_at=0; self.me_cache=None
-        self.qr_login=QRLoginFlow()
+        self.qr_login=QRLoginFlow(); self.ending_session=False
     def _key(self,key): return key if self.account_id==1 else f'account:{self.account_id}:{key}'
     def _cfg(self,key):
         r=self.db.one('SELECT value FROM config WHERE key=?',(self._key(key),)); return r['value'] if r else None
@@ -27,6 +27,7 @@ class TelegramAccountService:
     def credentials(self): return int(self.cipher.decrypt(self._cfg('api_id').encode())),self.cipher.decrypt(self._cfg('api_hash').encode()).decode()
     async def get_client(self):
         async with self.lock:
+            if self.ending_session: raise ValueError('该账号正在结束会话，请稍后重试')
             if self.client is None:
                 if not self.api_configured(): raise RuntimeError('请先填写 Telegram API ID 和 API Hash')
                 aid,ah=self.credentials(); self.client=TelegramClient(str(self.session_dir/self.session_name),aid,ah,sequential_updates=True)
@@ -63,12 +64,32 @@ class TelegramAccountService:
         except PasswordHashInvalidError: raise ValueError('两步验证密码错误')
     async def logout(self,clear=False):
         await self.qr_login.cancel()
-        if self.client:
-            try: await self.client.log_out()
-            finally: await self.client.disconnect(); self.client=None
-        if clear:
-            for p in self.session_dir.glob(self.session_name+'.session*'): p.unlink(missing_ok=True)
-        self.channels_cache=[]; self.me_cache=None
+        # A saved session must be revoked even when no client was loaded since
+        # restart. Keep it available for retry if Telegram cannot confirm logout.
+        if self.client is None and (self.session_dir/(self.session_name+'.session')).exists():
+            await self.get_client()
+        async with self.lock:
+            self.ending_session=True
+            try:
+                if self.client:
+                    try:
+                        if not self.client.is_connected(): await self.client.connect()
+                        if await self.client.is_user_authorized():
+                            if not await self.client.log_out():
+                                raise RuntimeError('Telegram 未确认结束会话，请稍后重试')
+                    except UnauthorizedError:
+                        pass  # Already revoked by Telegram or the phone owner.
+                    finally:
+                        await self.client.disconnect(); self.client=None
+                # log_out deletes the session itself; clear also removes any
+                # unauthorised session and SQLite sidecars for this account only.
+                if clear:
+                    for suffix in ('.session','.session-journal','.session-wal','.session-shm'):
+                        (self.session_dir/(self.session_name+suffix)).unlink(missing_ok=True)
+                self.channels_cache=[]; self.channels_cached_at=0; self.me_cache=None
+                self.phone=''; self.phone_code_hash=''
+            finally:
+                self.ending_session=False
     async def disconnect(self):
         await self.qr_login.cancel()
         if self.client: await self.client.disconnect(); self.client=None
@@ -243,7 +264,7 @@ class TelegramManager:
         r=self.db.one("SELECT value FROM config WHERE key='active_account_id'")
         try: aid=int(r['value']) if r else 1
         except Exception: aid=1
-        return aid if self.db.one('SELECT 1 x FROM accounts WHERE id=?',(aid,)) else 1
+        return aid if self.db.one('SELECT 1 x FROM accounts WHERE id=?',(aid,)) else self.db.one('SELECT id FROM accounts ORDER BY id LIMIT 1')['id']
     def service(self,account_id=None):
         aid=int(account_id or self.active_id); row=self.db.one('SELECT * FROM accounts WHERE id=?',(aid,))
         if not row: raise ValueError('Telegram 账号不存在')
@@ -256,7 +277,15 @@ class TelegramManager:
     async def send_code(self,*a,**kw): return await self.service().send_code(*a,**kw)
     async def verify_code(self,*a,**kw): return await self.service().verify_code(*a,**kw)
     async def verify_password(self,*a,**kw): return await self.service().verify_password(*a,**kw)
-    async def logout(self,*a,**kw): return await self.service().logout(*a,**kw)
+    async def logout(self,clear=False,account_id=None):
+        service=self.service(account_id)
+        # No await between checking jobs and marking queued work paused. Workers
+        # share this event loop, so they cannot claim another job in between.
+        if self.db.one("SELECT 1 FROM downloads WHERE account_id=? AND status IN ('downloading','pausing') UNION ALL SELECT 1 FROM outbox WHERE account_id=? AND status='uploading' LIMIT 1",(service.account_id,service.account_id)):
+            raise ValueError('该账号仍有下载或发送任务正在运行，请先暂停下载、取消发送，再结束会话')
+        self.db.execute("UPDATE downloads SET status='paused',speed=0,error='账号结束会话，重新登录后可继续',updated_at=? WHERE account_id=? AND status IN ('queued','retrying')",(now(),service.account_id))
+        self.db.execute("UPDATE outbox SET status='cancelled',error='账号结束会话，已取消排队发送',updated_at=? WHERE account_id=? AND status='queued'",(now(),service.account_id))
+        await asyncio.wait_for(service.logout(clear),timeout=45)
     async def channels(self,*a,**kw): return await self.service().channels(*a,**kw)
     async def videos(self,*a,**kw): return await self.service().videos(*a,**kw)
     async def thumbnail(self,*a,**kw): return await self.service().thumbnail(*a,**kw)
@@ -272,10 +301,25 @@ class TelegramManager:
     async def source_is_protected(self,account_id,media): return await self.service(account_id).source_is_protected(media)
     async def media_sendability(self,account_id,media): return await self.service(account_id).media_sendability(media)
     async def send_file(self,account_id,*a,**kw): return await self.service(account_id).send_file(*a,**kw)
-    def list_accounts(self):
+    async def list_accounts(self):
         rows=self.db.all('SELECT id,label,session_name,created_at FROM accounts ORDER BY id'); active=self.active_id
-        for x in rows: x['active']=x['id']==active; x['configured']=self.service(x['id']).api_configured(); x['session_exists']=(self.session_dir/(x['session_name']+'.session')).exists()
+        async def inspect(x):
+            service=self.service(x['id']); x['active']=x['id']==active; x['configured']=service.api_configured()
+            x['session_exists']=(self.session_dir/(x.pop('session_name')+'.session')).exists()
+            x['authorized']=False; x['status']='signed_out'
+            if not x['session_exists'] and service.client is None: return
+            try:
+                state=await asyncio.wait_for(service.status(),timeout=8)
+                x.update({k:state[k] for k in ('authorized','name','phone') if k in state})
+                x['status']='authorized' if x['authorized'] else 'signed_out'
+            except Exception:
+                x['authorized']=None; x['status']='unavailable'
+        await asyncio.gather(*(inspect(x) for x in rows))
         return rows
+    def rename_account(self,account_id,label):
+        label=label.strip()
+        if not label: raise ValueError('账号名称不能为空')
+        if not self.db.execute('UPDATE accounts SET label=? WHERE id=?',(label,account_id)).rowcount: raise ValueError('Telegram 账号不存在')
     def create_account(self,label):
         source=self.service(); name='account_'+uuid.uuid4().hex[:12]; cur=self.db.execute('INSERT INTO accounts(label,session_name,created_at) VALUES(?,?,?)',(label.strip() or '新账号',name,now())); aid=cur.lastrowid
         if source.api_configured():
@@ -289,10 +333,11 @@ class TelegramManager:
     async def remove(self,account_id):
         rows=self.db.all('SELECT id FROM accounts');
         if len(rows)<=1: raise ValueError('至少保留一个 Telegram 账号')
-        svc=self.service(account_id); await svc.logout(clear=True); self.services.pop(account_id,None)
+        was_active=self.active_id==account_id
+        await self.logout(clear=True,account_id=account_id); self.services.pop(account_id,None)
         self.db.execute("DELETE FROM config WHERE key LIKE ?",(f'account:{account_id}:%',))
         if account_id==1:
-            self.db.execute("DELETE FROM config WHERE key IN ('api_id','api_hash')")
+            self.db.execute("DELETE FROM config WHERE key IN ('api_id','api_hash','api_test_mode')")
         self.db.execute('DELETE FROM accounts WHERE id=?',(account_id,))
-        if self.active_id==account_id: self.activate(next(x['id'] for x in rows if x['id']!=account_id))
+        if was_active: self.activate(next(x['id'] for x in rows if x['id']!=account_id))
     async def disconnect_all(self): await asyncio.gather(*(x.disconnect() for x in self.services.values()),return_exceptions=True)

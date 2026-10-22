@@ -1,4 +1,4 @@
-import sqlite3, threading, time
+import sqlite3, threading, time, re
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -24,14 +24,14 @@ class Database:
           downloaded_bytes INTEGER NOT NULL DEFAULT 0,speed REAL NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'queued',
           retry_count INTEGER NOT NULL DEFAULT 0,
           error TEXT NOT NULL DEFAULT '',temp_path TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
-          UNIQUE(channel_id,message_id));
+          account_id INTEGER NOT NULL DEFAULT 1,UNIQUE(account_id,channel_id,message_id));
         CREATE TABLE IF NOT EXISTS media(
           id INTEGER PRIMARY KEY AUTOINCREMENT,download_id INTEGER UNIQUE,channel_id INTEGER NOT NULL,message_id INTEGER NOT NULL,
           channel_title TEXT NOT NULL,file_name TEXT NOT NULL,file_path TEXT NOT NULL UNIQUE,thumb_path TEXT NOT NULL DEFAULT '',
           size INTEGER NOT NULL,duration REAL NOT NULL DEFAULT 0,width INTEGER NOT NULL DEFAULT 0,height INTEGER NOT NULL DEFAULT 0,
           mime TEXT NOT NULL DEFAULT 'video/mp4',caption TEXT NOT NULL DEFAULT '',message_date TEXT NOT NULL DEFAULT '',
-          downloaded_at TEXT NOT NULL,FOREIGN KEY(download_id) REFERENCES downloads(id) ON DELETE SET NULL,
-          UNIQUE(channel_id,message_id));
+          downloaded_at TEXT NOT NULL,account_id INTEGER NOT NULL DEFAULT 1,
+          FOREIGN KEY(download_id) REFERENCES downloads(id) ON DELETE SET NULL,UNIQUE(account_id,channel_id,message_id));
         CREATE TABLE IF NOT EXISTS outbox(
           id INTEGER PRIMARY KEY AUTOINCREMENT,account_id INTEGER NOT NULL,peer_id INTEGER NOT NULL,
           media_id INTEGER NOT NULL,caption TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'queued',
@@ -48,6 +48,36 @@ class Database:
             if not c.execute('SELECT 1 FROM accounts LIMIT 1').fetchone():
                 c.execute("INSERT INTO accounts(id,label,session_name,created_at) VALUES(1,'账号 1','account',?)",(now(),))
             c.commit()
+            self._scope_account_uniqueness(c)
+    def _scope_account_uniqueness(self,c):
+        """Preserve existing IDs, files and foreign keys when upgrading v1 data."""
+        tables=[]
+        for table in ('downloads','media'):
+            sql=c.execute('SELECT sql FROM sqlite_master WHERE type=\'table\' AND name=?',(table,)).fetchone()['sql']
+            updated=re.sub(r'UNIQUE\s*\(\s*channel_id\s*,\s*message_id\s*\)', 'UNIQUE(account_id,channel_id,message_id)',sql,flags=re.I)
+            if updated!=sql: tables.append((table,updated))
+        if not tables: return
+        c.execute('PRAGMA foreign_keys=OFF')
+        try:
+            c.execute('BEGIN IMMEDIATE')
+            for table,sql in tables:
+                seq=c.execute('SELECT seq FROM sqlite_sequence WHERE name=?',(table,)).fetchone()
+                replacement=table+'_account_scoped'
+                sql=re.sub(r'^(CREATE TABLE\s+)(?:"?'+table+r'"?)',r'\1'+replacement,sql,count=1,flags=re.I)
+                c.execute(sql)
+                columns=','.join('"'+x['name']+'"' for x in c.execute(f'PRAGMA table_info({table})'))
+                c.execute(f'INSERT INTO {replacement}({columns}) SELECT {columns} FROM {table}')
+                c.execute(f'DROP TABLE {table}')
+                c.execute(f'ALTER TABLE {replacement} RENAME TO {table}')
+                if seq: c.execute('UPDATE sqlite_sequence SET seq=max(seq,?) WHERE name=?',(seq['seq'],table))
+            c.execute('CREATE INDEX IF NOT EXISTS idx_download_status ON downloads(status)')
+            c.execute('CREATE INDEX IF NOT EXISTS idx_media_channel ON media(channel_id)')
+            if c.execute('PRAGMA foreign_key_check').fetchone(): raise RuntimeError('账号数据迁移外键检查失败')
+            c.commit()
+        except Exception:
+            c.rollback(); raise
+        finally:
+            c.execute('PRAGMA foreign_keys=ON')
     def recover_interrupted(self):
         """Recover jobs only when the real web-service lifespan starts.
 
