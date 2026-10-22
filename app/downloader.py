@@ -54,8 +54,10 @@ class Downloader:
         if isinstance(e,(ConnectionError,TimeoutError,OSError)) or any(x in type(e).__name__.lower() for x in ('timeout','connection','rpc')): return 'Telegram 网络连接中断，可点击重试继续下载'
         return '下载失败，可点击重试继续下载'
     async def download(self,job):
+        temp=self.temp/f"{job['id']}.part"
+        existing=temp.stat().st_size if temp.exists() else 0
         free=shutil.disk_usage(self.root).free
-        if free-self.reserve < max(job['total_bytes'],0):
+        if free-self.reserve < max(job['total_bytes']-existing,0):
             self.db.execute("UPDATE downloads SET status='paused',error='磁盘剩余空间不足，任务已暂停',updated_at=? WHERE id=?",(now(),job['id'])); return
         c=await self.tg.get_client(job.get('account_id',1)); entity=await c.get_entity(job['channel_id']); msg=await c.get_messages(entity,ids=job['message_id'])
         if not msg or not msg.video: raise RuntimeError('Telegram 原消息不存在或已不可访问')
@@ -63,6 +65,8 @@ class Downloader:
         final=channel_dir/f"{job['message_id']}_{job['file_name']}"; temp=self.temp/f"{job['id']}.part"; total=int(getattr(msg.video,'size',0) or job['total_bytes'] or 0)
         existing=temp.stat().st_size if temp.exists() else 0
         if total and existing>total: temp.unlink(missing_ok=True); existing=0
+        if shutil.disk_usage(self.root).free-self.reserve < max(total-existing,0):
+            self.db.execute("UPDATE downloads SET status='paused',speed=0,error='磁盘剩余空间不足，任务已暂停',updated_at=? WHERE id=?",(now(),job['id'])); return
         started=time.monotonic(); last_t=started; last_b=existing
         async def progress(cur,total):
             nonlocal last_t,last_b
@@ -77,13 +81,17 @@ class Downloader:
         try:
             with temp.open('ab' if existing else 'wb') as f:
                 current=existing
+                if job['id'] in self.cancelled: raise UserCancelled()
+                if job['id'] in self.pause_requested: raise DownloadPaused()
                 async for chunk in c.iter_download(msg.video,offset=existing,request_size=512*1024,chunk_size=512*1024,file_size=total or None):
                     if job['id'] in self.cancelled: raise UserCancelled()
                     if job['id'] in self.pause_requested: raise DownloadPaused()
                     f.write(chunk); current+=len(chunk); await progress(current,total)
+                if job['id'] in self.cancelled: raise UserCancelled()
+                if job['id'] in self.pause_requested: raise DownloadPaused()
                 f.flush(); os.fsync(f.fileno())
         except UserCancelled:
-            temp.unlink(missing_ok=True); self.cancelled.discard(job['id']); self.db.execute("UPDATE downloads SET status='cancelled',speed=0,error='',updated_at=? WHERE id=?",(now(),job['id'])); return
+            temp.unlink(missing_ok=True); self.cancelled.discard(job['id']); self.db.execute("UPDATE downloads SET status='cancelled',downloaded_bytes=0,temp_path='',speed=0,error='',updated_at=? WHERE id=?",(now(),job['id'])); return
         except DownloadPaused:
             current=temp.stat().st_size if temp.exists() else existing
             self.pause_requested.discard(job['id'])
@@ -92,6 +100,8 @@ class Downloader:
             current=temp.stat().st_size if temp.exists() else existing
             self.db.execute("UPDATE downloads SET status='queued',downloaded_bytes=?,speed=0,error='服务重启，稍后自动续传',updated_at=? WHERE id=?",(current,now(),job['id'])); return
         if not temp.exists(): raise RuntimeError('未生成下载文件')
+        if total and temp.stat().st_size!=total:
+            raise ConnectionError('下载文件大小不完整，保留临时文件等待续传')
         os.replace(temp,final); meta=await asyncio.to_thread(self.probe,final,job['id'])
         self.db.execute('''INSERT OR REPLACE INTO media(download_id,account_id,channel_id,message_id,channel_title,file_name,file_path,thumb_path,size,duration,width,height,mime,caption,message_date,downloaded_at)
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(job['id'],job.get('account_id',1),job['channel_id'],job['message_id'],job['channel_title'],job['file_name'],str(final),meta['thumb'],final.stat().st_size,meta['duration'],meta['width'],meta['height'],mimetypes.guess_type(final.name)[0] or 'application/octet-stream',msg.message or '',msg.date.isoformat(),now()))
@@ -106,10 +116,18 @@ class Downloader:
         except Exception: log.warning('媒体信息读取失败 id=%s',job_id)
         return d
     def cancel(self,id):
-        self.pause_requested.discard(id)
-        self.cancelled.add(id)
-        changed=self.db.execute("UPDATE downloads SET status='cancelled',updated_at=? WHERE id=? AND status IN ('queued','retrying')",(now(),id)).rowcount
-        if changed: self.cancelled.discard(id)
+        with self.db.lock:
+            row=self.db.one('SELECT status FROM downloads WHERE id=?',(id,))
+            if not row or row['status'] not in ('queued','retrying','paused','failed','downloading','pausing'):
+                return False
+            self.pause_requested.discard(id)
+            if row['status'] in ('downloading','pausing'):
+                self.cancelled.add(id)
+            else:
+                (self.temp/f'{id}.part').unlink(missing_ok=True)
+                self.db.execute("UPDATE downloads SET status='cancelled',downloaded_bytes=0,temp_path='',speed=0,error='',updated_at=? WHERE id=?",(now(),id))
+                self.cancelled.discard(id)
+            return True
     def pause(self,id):
         row=self.db.one('SELECT status FROM downloads WHERE id=?',(id,))
         if not row: return False
