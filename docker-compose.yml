@@ -6,6 +6,7 @@ services:
     env_file: .env
     environment:
       USE_X_ACCEL: "${USE_X_ACCEL:-true}"
+      AUTO_SMOOTH: "${AUTO_SMOOTH:-false}"
     volumes:
       - /data/telegram-video-manager:/data/telegram-video-manager
     expose:

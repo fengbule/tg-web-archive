@@ -11,6 +11,7 @@ services:
       DATA_ROOT: /data/telegram-video-manager
       USE_X_ACCEL: "true"
       COOKIE_SECURE: "true"
+      AUTO_SMOOTH: "${AUTO_SMOOTH:-false}"
     volumes:
       - archive-data:/data/telegram-video-manager
     expose:

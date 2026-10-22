@@ -12,6 +12,8 @@ from .db import Database, now
 from .telegram_service import TelegramManager
 from .downloader import Downloader
 from .outbox import OutboxSender
+from .transcoder import Transcoder
+from .zipstream import zip_media_files
 
 logging.basicConfig(level=os.getenv('LOG_LEVEL','INFO'),format='%(asctime)s %(levelname)s %(name)s %(message)s')
 log=logging.getLogger('tvm')
@@ -33,12 +35,15 @@ if os.getenv('TELEGRAM_CLIENT_CONFIG'):
         del saved_id,saved_hash
     del client_config
 downloader=Downloader(db,tg,ROOT,int(os.getenv('DOWNLOAD_CONCURRENCY','2')),float(os.getenv('MIN_FREE_GB','10')))
+transcoder=Transcoder(db,ROOT,os.getenv('AUTO_SMOOTH','false').lower()=='true')
+downloader.transcoder=transcoder
 outbox=OutboxSender(db,tg,ROOT)
 
 @asynccontextmanager
 async def lifespan(app):
     db.recover_interrupted()
-    await downloader.start(); await outbox.start(); yield; await outbox.stop(); await downloader.stop()
+    await downloader.start(); await transcoder.start(); await outbox.start(); yield
+    await outbox.stop(); await transcoder.stop(); await downloader.stop()
     await tg.disconnect_all()
 app=FastAPI(title='Telegram 视频管理器',lifespan=lifespan,docs_url=None,redoc_url=None)
 
@@ -355,7 +360,12 @@ def safe_unlink(value):
         size=p.stat().st_size; p.unlink(missing_ok=True); return size
     except OSError: return 0
 def delete_media_record(x):
+    try: transcoder.cancel_smooth(int(x['id']))
+    except Exception: pass
     removed=safe_unlink(x.get('file_path')); safe_unlink(x.get('thumb_path'))
+    if x.get('smooth_path'): safe_unlink(x['smooth_path'])
+    try: transcoder.delete_variants(Path(x.get('file_path') or ''))
+    except Exception: pass
     if x.get('download_id'): safe_unlink(str(ROOT/'temp'/f"{x['download_id']}.part"))
     db.execute('DELETE FROM media WHERE id=?',(x['id'],))
     if x.get('download_id'): db.execute('DELETE FROM downloads WHERE id=?',(x['download_id'],))
@@ -373,6 +383,46 @@ def bulk_delete_media(b:BulkDelete):
     rows=db.all('SELECT * FROM media') if b.all else db.all('SELECT * FROM media WHERE id IN ('+','.join('?' for _ in ids)+')',tuple(ids))
     removed=sum(delete_media_record(x) for x in rows)
     return {'deleted':len(rows),'bytes':removed}
+@app.get('/api/media/download-zip')
+def download_zip(ids:str=''):
+    wanted=[]
+    for part in (ids or '').split(','):
+        part=part.strip()
+        if part.isdigit(): wanted.append(int(part))
+    if not wanted: raise HTTPException(400,'请选择要下载的视频')
+    if len(wanted)>200: raise HTTPException(400,'一次最多打包下载 200 个视频')
+    rows=db.all('SELECT * FROM media WHERE id IN ('+','.join('?' for _ in wanted)+')',tuple(dict.fromkeys(wanted)))
+    if not rows: raise HTTPException(404,'没有找到可下载的视频')
+    items=[]
+    for x in rows:
+        p=Path(x['file_path']).resolve()
+        if ROOT not in p.parents or not p.is_file(): continue
+        items.append((x['file_name'],p))
+    if not items: raise HTTPException(404,'视频文件不存在')
+    name=f"telegram-videos-{now()[:10]}.zip"
+    return StreamingResponse(zip_media_files(items),media_type='application/zip',headers={
+        'Content-Disposition':f"attachment; filename*=UTF-8''{quote(name)}",
+        'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+@app.get('/api/media/{id}/smooth')
+def smooth_status(id:int):
+    x=db.one('SELECT id,smooth_status,smooth_progress,smooth_error,smooth_size,smooth_path FROM media WHERE id=?',(id,))
+    if not x: raise HTTPException(404,'视频不存在')
+    ready=bool(x['smooth_path'] and Path(x['smooth_path']).is_file() and x['smooth_status']=='ready')
+    status='ready' if ready else x['smooth_status']
+    return {'id':x['id'],'status':status,'progress':float(x['smooth_progress'] or 0),
+            'error':x['smooth_error'] or '','size':int(x['smooth_size'] or 0),'ready':ready}
+@app.post('/api/media/{id}/smooth')
+def start_smooth(id:int):
+    x,p=media_row(id); transcoder.enqueue_smooth(id)
+    return smooth_status(id)
+@app.delete('/api/media/{id}/smooth')
+def remove_smooth(id:int):
+    x=db.one('SELECT * FROM media WHERE id=?',(id,))
+    if not x: raise HTTPException(404,'视频不存在')
+    transcoder.cancel_smooth(id)
+    if x.get('smooth_path'): safe_unlink(x['smooth_path'])
+    db.execute("UPDATE media SET smooth_path='',smooth_status='idle',smooth_progress=0,smooth_size=0,smooth_error='已移除流畅版' WHERE id=?",(id,))
+    return {'ok':True}
 @app.get('/api/media/{id}')
 def media_detail(id:int): return media_row(id)[0]
 @app.get('/api/media/{id}/sendability')
@@ -384,8 +434,14 @@ def thumbnail(id:int):
     if not p or ROOT not in p.parents or not p.is_file(): raise HTTPException(404,'无缩略图')
     return FileResponse(p,media_type='image/jpeg')
 @app.get('/api/media/{id}/stream')
-def stream(id:int,request:Request,download:bool=False):
-    x,p=media_row(id); size=p.stat().st_size; mime=x['mime']; rng=request.headers.get('range')
+def stream(id:int,request:Request,download:bool=False,quality:str='original'):
+    x,p=media_row(id); filename=x['file_name']; mime=x['mime']
+    if quality=='smooth':
+        smooth=Path(x.get('smooth_path') or '')
+        if x.get('smooth_status')!='ready' or not smooth.is_file(): raise HTTPException(409,'流畅版尚未生成完成')
+        p=smooth.resolve(); mime='video/mp4'; filename=Path(filename).stem+' - 流畅480p.mp4'
+        if ROOT not in p.parents: raise HTTPException(404,'视频文件不存在')
+    size=p.stat().st_size; rng=request.headers.get('range')
     # Validate before X-Accel as well, so bad ranges get the same non-cacheable
     # response with or without Nginx acceleration.
     if rng:
@@ -401,7 +457,7 @@ def stream(id:int,request:Request,download:bool=False):
                 start=int(start_s); end=min(int(end_s),size-1) if end_s else size-1
                 if start>=size or start>end: raise ValueError()
         except ValueError: return Response(status_code=416,headers={'Content-Range':f'bytes */{size}'})
-    headers={'Accept-Ranges':'bytes','Cache-Control':'private, max-age=3600','Content-Disposition':('attachment' if download else 'inline')+f"; filename*=UTF-8''{quote(x['file_name'])}"}
+    headers={'Accept-Ranges':'bytes','Cache-Control':'private, max-age=3600','Content-Disposition':('attachment' if download else 'inline')+f"; filename*=UTF-8''{quote(filename)}"}
     if os.getenv('USE_X_ACCEL','false').lower()=='true' and MEDIA_ROOT in p.parents:
         relative=quote(p.relative_to(MEDIA_ROOT).as_posix(),safe='/')
         headers['X-Accel-Redirect']='/protected-media/'+relative
@@ -411,7 +467,7 @@ def stream(id:int,request:Request,download:bool=False):
         with p.open('rb') as f:
             f.seek(start); remain=end-start+1
             while remain:
-                chunk=f.read(min(1024*1024,remain));
+                chunk=f.read(min(1024*1024,remain))
                 if not chunk: break
                 remain-=len(chunk); yield chunk
     headers.update({'Content-Range':f'bytes {start}-{end}/{size}','Content-Length':str(end-start+1)})
@@ -423,7 +479,17 @@ def rename(id:int,b:Rename):
     if name!=b.name or name in ('.','..'): raise HTTPException(400,'文件名不合法')
     new=p.with_name(f"{x['message_id']}_{name}")
     if new.exists() and new!=p: raise HTTPException(409,'同名文件已存在')
-    p.rename(new); db.execute('UPDATE media SET file_name=?,file_path=? WHERE id=?',(name,str(new),id)); return {'ok':True}
+    p.rename(new)
+    smooth=x.get('smooth_path') or ''
+    if smooth:
+        old_smooth=Path(smooth)
+        if old_smooth.is_file():
+            new_smooth=new.with_name(new.stem+'.smooth.mp4')
+            try:
+                old_smooth.replace(new_smooth)
+                db.execute('UPDATE media SET smooth_path=? WHERE id=?',(str(new_smooth),id))
+            except OSError: pass
+    db.execute('UPDATE media SET file_name=?,file_path=? WHERE id=?',(name,str(new),id)); return {'ok':True}
 @app.delete('/api/media/{id}')
 def delete_media(id:int):
     x=db.one('SELECT * FROM media WHERE id=?',(id,))

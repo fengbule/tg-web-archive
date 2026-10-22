@@ -9,6 +9,7 @@ class Downloader:
     def __init__(self,db,tg,root:Path,concurrency=2,min_free_gb=10):
         self.db=db; self.tg=tg; self.root=root; self.media=root/'media'; self.temp=root/'temp'; self.thumbs=root/'thumbnails'
         self.concurrency=concurrency; self.reserve=int(min_free_gb*1024**3); self.workers=[]; self.cancelled=set(); self.pause_requested=set(); self.stopping=False
+        self.transcoder=None
     async def start(self): self.workers=[asyncio.create_task(self.worker(i)) for i in range(self.concurrency)]
     async def stop(self):
         self.stopping=True
@@ -105,6 +106,10 @@ class Downloader:
                 self.db.execute('''INSERT OR REPLACE INTO media(download_id,account_id,channel_id,message_id,channel_title,file_name,file_path,thumb_path,size,duration,width,height,mime,caption,message_date,downloaded_at)
                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(job['id'],job.get('account_id',1),job['channel_id'],job['message_id'],job['channel_title'],job['file_name'],str(final),meta['thumb'],final.stat().st_size,meta['duration'],meta['width'],meta['height'],mimetypes.guess_type(final.name)[0] or 'application/octet-stream',msg.message or '',msg.date.isoformat(),now()))
                 self.db.execute("UPDATE downloads SET status='completed',downloaded_bytes=?,total_bytes=?,speed=0,error='',temp_path='',updated_at=? WHERE id=?",(final.stat().st_size,final.stat().st_size,now(),job['id']))
+                row=self.db.one('SELECT id FROM media WHERE account_id=? AND channel_id=? AND message_id=?',(job.get('account_id',1),job['channel_id'],job['message_id']))
+                if row and self.transcoder:
+                    self.transcoder.enqueue_faststart(int(row['id']))
+                    if self.transcoder.auto_smooth: self.transcoder.enqueue_smooth(int(row['id']))
         except UserCancelled:
             temp.unlink(missing_ok=True); (self.thumbs/f"{job['id']}.jpg").unlink(missing_ok=True); self.cancelled.discard(job['id']); self.db.execute("UPDATE downloads SET status='cancelled',downloaded_bytes=0,temp_path='',speed=0,error='',updated_at=? WHERE id=?",(now(),job['id'])); return
         except DownloadPaused:
