@@ -477,9 +477,9 @@ tr:last-child td{border-bottom:0}
 .player-stage{position:relative;background:#000;display:grid;place-items:center;min-height:240px;overflow:hidden}
 .player-ambient{position:absolute;inset:-8%;background-size:cover;background-position:center;filter:blur(46px) brightness(.34) saturate(1.2);transform:scale(1.08);pointer-events:none}
 .player-stage video{position:relative;z-index:1;width:100%;max-height:calc(88dvh - 160px);display:block;background:transparent;aspect-ratio:16/9;object-fit:contain}
-.player-spinner{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:46px;height:46px;border-radius:50%;border:3px solid rgba(255,255,255,.16);border-top-color:#fff;animation:spin .8s linear infinite;pointer-events:none;opacity:0;transition:opacity .2s}
+.player-spinner{position:absolute;z-index:5;left:50%;top:50%;transform:translate(-50%,-50%);width:46px;height:46px;border-radius:50%;border:3px solid rgba(255,255,255,.16);border-top-color:#fff;animation:spin .8s linear infinite;pointer-events:none;opacity:0;transition:opacity .2s}
 .player-spinner.show{opacity:1}
-.player-bigplay{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:74px;height:74px;border-radius:50%;display:grid;place-items:center;background:rgba(12,18,34,.58);border:1px solid rgba(255,255,255,.3);backdrop-filter:blur(10px);color:#fff;box-shadow:0 20px 60px rgba(0,0,0,.55);transition:opacity .2s,transform .2s}
+.player-bigplay{position:absolute;z-index:4;left:50%;top:50%;transform:translate(-50%,-50%);width:74px;height:74px;border-radius:50%;display:grid;place-items:center;background:rgba(12,18,34,.58);border:1px solid rgba(255,255,255,.3);backdrop-filter:blur(10px);color:#fff;box-shadow:0 20px 60px rgba(0,0,0,.55);transition:opacity .2s,transform .2s}
 .player-bigplay svg{width:28px;height:28px;margin-left:3px}
 .player-bigplay.hide{opacity:0;pointer-events:none;transform:translate(-50%,-50%) scale(.8)}
 .player-controls{padding:10px 16px 12px;background:linear-gradient(180deg,rgba(10,15,26,.75),#0a0f1a)}
@@ -510,7 +510,7 @@ tr:last-child td{border-bottom:0}
 .player-actions a:hover{background:rgba(255,255,255,.14)}
 .player-hint{font-size:10px;color:#4d5a72}
 .player-error{color:#ff8d9e;font-size:12px;padding:0 18px 12px;background:#0a0f1a}
-.buffer-status{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);padding:7px 12px;border-radius:20px;background:rgba(4,8,18,.75);color:#fff;font-size:10.5px;pointer-events:none;backdrop-filter:blur(8px)}
+.buffer-status{position:absolute;z-index:4;left:50%;bottom:18px;transform:translateX(-50%);padding:7px 12px;border-radius:20px;background:rgba(4,8,18,.75);color:#fff;font-size:10.5px;pointer-events:none;backdrop-filter:blur(8px)}
 .original-pill{display:inline-flex;border-radius:20px;background:rgba(53,211,154,.14);color:#8df0cb;font-size:10px;font-weight:700;padding:3px 8px;border:1px solid rgba(53,211,154,.24)}
 
 /* ---------- toast ---------- */

@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 from pathlib import Path
 
 from .db import now
@@ -155,6 +156,13 @@ class Transcoder:
             duration = (await asyncio.to_thread(probe_media, path))["duration"]
         destination = safe_variant_path(path, ".smooth.mp4")
         temp = safe_variant_path(path, ".smooth.tmp.mp4")
+        free = shutil.disk_usage(self.root).free
+        if free < max(2 * 1024**3, path.stat().st_size):
+            self.db.execute(
+                "UPDATE media SET smooth_status='failed', smooth_error='磁盘剩余空间不足，暂不生成流畅版', smooth_progress=0 WHERE id=?",
+                (media_id,),
+            )
+            return
         temp.unlink(missing_ok=True)
         self.db.execute(
             "UPDATE media SET smooth_status='processing', smooth_progress=0, smooth_error='' WHERE id=?",

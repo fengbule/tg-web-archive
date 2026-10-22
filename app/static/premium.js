@@ -270,7 +270,7 @@
         </div>
       </div>
       <div class="player-foot">
-        <div class="player-meta"><span>画质 <b>${quality === 'smooth' ? '480P 流畅' : '原画 · 未转码'}</b></span><span>码率 <b>${x.size && x.duration ? (x.size * 8 / x.duration / 1e6).toFixed(2) + ' Mbps' : '未知'}</b></span><span>时长 <b>${duration(x.duration)}</b></span><span class="player-hint">空格 播放 · ← → 快进 · F 全屏</span></div>
+        <div class="player-meta"><span>画质 <b id="metaQuality">${quality === 'smooth' ? '480P 流畅' : '原画 · 未转码'}</b></span><span>码率 <b id="metaBitrate">${x.size && x.duration ? (x.size * 8 / x.duration / 1e6).toFixed(2) + ' Mbps' : '未知'}</b></span><span>时长 <b>${duration(x.duration)}</b></span><span class="player-hint">空格 播放 · ← → 快进 · F 全屏</span></div>
         <div class="player-actions"><button class="ghost" id="smoothButton" type="button">${smooth ? '播放 480P 流畅版' : '生成 480P 流畅版'}</button><a href="/api/media/${id}/stream?download=true">${icon('download')}<span>下载到本机</span></a></div>
       </div>
       <div class="player-error" id="playerError" hidden></div>
@@ -440,6 +440,13 @@
       };
       video.addEventListener('loadedmetadata', restore);
       qualityButton.textContent = quality === 'smooth' ? '480P 流畅' : '原画';
+      const metaQuality = $('#metaQuality');
+      const metaBitrate = $('#metaBitrate');
+      if (metaQuality) metaQuality.textContent = quality === 'smooth' ? '480P 流畅' : '原画 · 未转码';
+      if (metaBitrate) {
+        const size = quality === 'smooth' ? Number(x.smooth_size) : Number(x.size);
+        metaBitrate.textContent = size && x.duration ? (size * 8 / x.duration / 1e6).toFixed(2) + ' Mbps' : '未知';
+      }
       toast(quality === 'smooth' ? '已切换到 480P 流畅版' : '已切换到原画');
     };
     window.pSetQuality = pSetQuality;
