@@ -7,6 +7,7 @@ from telethon.tl.types import Channel, Chat, User
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
 from .db import now
+from .qr_login import QRLoginFlow
 
 log=logging.getLogger('tvm.telegram')
 
@@ -14,12 +15,14 @@ class TelegramAccountService:
     def __init__(self,account_id:int,session_name:str,session_dir:Path,thumb_dir:Path,db,cipher):
         self.account_id=account_id; self.session_name=session_name; self.session_dir=session_dir; self.thumb_dir=thumb_dir
         self.db=db; self.cipher=cipher; self.client=None; self.phone=''; self.phone_code_hash=''; self.lock=asyncio.Lock(); self.channels_cache=[]; self.channels_cached_at=0; self.me_cache=None
+        self.qr_login=QRLoginFlow()
     def _key(self,key): return key if self.account_id==1 else f'account:{self.account_id}:{key}'
     def _cfg(self,key):
         r=self.db.one('SELECT value FROM config WHERE key=?',(self._key(key),)); return r['value'] if r else None
-    def save_api(self,api_id,api_hash):
+    def save_api(self,api_id,api_hash,test_mode=False):
         for k,v in [('api_id',str(api_id)),('api_hash',api_hash)]:
             enc=self.cipher.encrypt(v.encode()).decode(); self.db.execute('INSERT OR REPLACE INTO config(key,value) VALUES(?,?)',(self._key(k),enc))
+        self.db.execute('INSERT OR REPLACE INTO config(key,value) VALUES(?,?)',(self._key('api_test_mode'),'1' if test_mode else '0'))
     def api_configured(self): return bool(self._cfg('api_id') and self._cfg('api_hash'))
     def credentials(self): return int(self.cipher.decrypt(self._cfg('api_id').encode())),self.cipher.decrypt(self._cfg('api_hash').encode()).decode()
     async def get_client(self):
@@ -41,6 +44,7 @@ class TelegramAccountService:
             me=await self._me(); result['name']=' '.join(x for x in [me.first_name,me.last_name] if x); result['phone']='***'+(me.phone[-4:] if me.phone else '')
         return result
     async def send_code(self,phone,api_id=None,api_hash=None):
+        await self.qr_login.cancel()
         if api_id and api_hash:
             if self.client: await self.client.disconnect(); self.client=None
             self.save_api(api_id,api_hash)
@@ -52,9 +56,13 @@ class TelegramAccountService:
         except PhoneCodeInvalidError: raise ValueError('验证码无效，请重新输入')
     async def verify_password(self,password):
         c=await self.get_client()
-        try: await c.sign_in(password=password)
+        try:
+            await c.sign_in(password=password)
+            self.me_cache=None
+            self.qr_login.state={'state':'authorized'}
         except PasswordHashInvalidError: raise ValueError('两步验证密码错误')
     async def logout(self,clear=False):
+        await self.qr_login.cancel()
         if self.client:
             try: await self.client.log_out()
             finally: await self.client.disconnect(); self.client=None
@@ -62,6 +70,7 @@ class TelegramAccountService:
             for p in self.session_dir.glob(self.session_name+'.session*'): p.unlink(missing_ok=True)
         self.channels_cache=[]; self.me_cache=None
     async def disconnect(self):
+        await self.qr_login.cancel()
         if self.client: await self.client.disconnect(); self.client=None
     async def channels(self,query='',refresh=False):
         if self.channels_cache and not refresh and time.monotonic()-self.channels_cached_at<300:
@@ -270,7 +279,8 @@ class TelegramManager:
     def create_account(self,label):
         source=self.service(); name='account_'+uuid.uuid4().hex[:12]; cur=self.db.execute('INSERT INTO accounts(label,session_name,created_at) VALUES(?,?,?)',(label.strip() or '新账号',name,now())); aid=cur.lastrowid
         if source.api_configured():
-            for key in ('api_id','api_hash'):
+            for key in ('api_id','api_hash','api_test_mode'):
+                if source._cfg(key) is None: continue
                 self.db.execute('INSERT OR REPLACE INTO config(key,value) VALUES(?,?)',(f'account:{aid}:{key}',source._cfg(key)))
         return aid
     def activate(self,account_id):

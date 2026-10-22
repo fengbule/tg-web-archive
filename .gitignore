@@ -6,3 +6,12 @@ __pycache__/
 .local/
 *.pyc
 data/
+.env.*
+!.env.example
+backups/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite*
+*.log
+*.session*

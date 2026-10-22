@@ -1,0 +1,52 @@
+name: tg-web-archive
+services:
+  app:
+    image: tg-web-archive-app:${IMAGE_TAG:-local}
+    build: .
+    restart: unless-stopped
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    env_file: .env
+    environment:
+      APP_VERSION: "${IMAGE_TAG:-local}"
+      DATA_ROOT: /data/telegram-video-manager
+      USE_X_ACCEL: "true"
+      COOKIE_SECURE: "true"
+    volumes:
+      - archive-data:/data/telegram-video-manager
+    expose:
+      - "8000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+  nginx:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${HTTP_PORT:-8081}:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./data/media:/data/telegram-video-manager/media:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+volumes:
+  archive-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data

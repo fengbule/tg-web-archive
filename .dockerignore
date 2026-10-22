@@ -7,4 +7,11 @@ __pycache__
 *.session*
 data
 tests
+backups
+docs
+output
+*.db*
+*.sqlite*
+*.log
+.env.*
 

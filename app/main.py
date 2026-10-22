@@ -1,4 +1,4 @@
-import asyncio, base64, bcrypt, hashlib, logging, os, secrets, shutil
+import asyncio, base64, bcrypt, hashlib, json, logging, os, secrets, shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
@@ -22,6 +22,16 @@ db=Database(ROOT/'database'/'app.db'); db.init()
 secret=os.environ['SESSION_SECRET']; serializer=URLSafeTimedSerializer(secret,salt='admin-session')
 cipher=Fernet(os.environ['CONFIG_ENCRYPTION_KEY'].encode())
 tg=TelegramManager(ROOT/'session',ROOT/'thumbnails'/'telegram',db,cipher)
+if os.getenv('TELEGRAM_CLIENT_CONFIG'):
+    client_config=json.loads(Path(os.environ['TELEGRAM_CLIENT_CONFIG']).read_text())
+    if not tg.service().api_configured():
+        tg.service().save_api(int(client_config['api_id']),client_config['api_hash'],test_mode=client_config.get('test_only') is True)
+    elif tg.service()._cfg('api_test_mode') is None:
+        saved_id,saved_hash=tg.service().credentials()
+        mode=client_config.get('test_only') is True and saved_id==int(client_config['api_id']) and secrets.compare_digest(saved_hash,client_config['api_hash'])
+        db.execute('INSERT OR REPLACE INTO config(key,value) VALUES(?,?)',(tg.service()._key('api_test_mode'),'1' if mode else '0'))
+        del saved_id,saved_hash
+    del client_config
 downloader=Downloader(db,tg,ROOT,int(os.getenv('DOWNLOAD_CONCURRENCY','2')),float(os.getenv('MIN_FREE_GB','10')))
 outbox=OutboxSender(db,tg,ROOT)
 
@@ -99,7 +109,7 @@ async def dashboard():
     return {'disk':{'total':du.total,'used':du.used,'free':du.free},'media_bytes':size_dir(ROOT/'media'),'temp_bytes':size_dir(ROOT/'temp'),'video_count':count,'active_downloads':active,'reserve_bytes':downloader.reserve}
 
 @app.get('/api/telegram/status')
-async def tg_status(): return await tg.status()
+async def tg_status(): return {**await tg.status(),'qr_test_mode':tg.service()._cfg('api_test_mode')=='1'}
 class CredentialReveal(BaseModel): password:str=Field(min_length=1,max_length=200)
 def check_view_password(password:str):
     stored=config_value('credential_view_password_pbkdf2')
@@ -157,6 +167,36 @@ async def account_delete(account_id:int):
     except ValueError as e: raise HTTPException(400,str(e))
     return {'ok':True}
 class SendCode(BaseModel): phone:str; api_id:int|None=None; api_hash:str|None=None
+class QRStart(BaseModel):
+    api_id:int|None=Field(default=None,gt=0)
+    api_hash:str|None=Field(default=None,pattern=r'^[a-fA-F0-9]{32}$')
+def qr_service(account_id):
+    try: return tg.service(account_id)
+    except ValueError: raise HTTPException(404,'Telegram 账号不存在') from None
+@app.post('/api/telegram/qr/start')
+async def qr_start(b:QRStart,account_id:int|None=None):
+    service=qr_service(account_id)
+    try:
+        if bool(b.api_id)!=bool(b.api_hash): raise HTTPException(400,'请同时填写 API ID 和 API Hash')
+        if b.api_id:
+            # Do not replace a live account's API configuration or session.
+            if service.api_configured() and (await service.status())['authorized']:
+                return {'state':'authorized','account_id':service.account_id}
+            await service.disconnect()
+            service.save_api(b.api_id,b.api_hash)
+        if not service.api_configured(): raise HTTPException(400,'扫码前仍需填写一次 Telegram API ID 和 API Hash')
+        state=await service.qr_login.start(await service.get_client())
+        return {**state,'account_id':service.account_id}
+    except HTTPException: raise
+    except Exception: raise HTTPException(502,'无法连接 Telegram 生成二维码，请检查 API 凭据和服务器网络') from None
+@app.get('/api/telegram/qr/status')
+def qr_status(account_id:int|None=None):
+    service=qr_service(account_id)
+    return {**service.qr_login.snapshot(),'account_id':service.account_id}
+@app.post('/api/telegram/qr/cancel')
+async def qr_cancel(account_id:int|None=None):
+    await qr_service(account_id).qr_login.cancel()
+    return {'ok':True}
 @app.post('/api/telegram/send-code')
 async def send_code(b:SendCode):
     await tg.send_code(b.phone,b.api_id,b.api_hash); return {'ok':True}
@@ -336,8 +376,15 @@ def stream(id:int,request:Request,download:bool=False):
         return Response(media_type=mime,headers=headers)
     if not rng: return FileResponse(p,media_type=mime,headers=headers)
     try:
-        unit,val=rng.split('=',1); start_s,end_s=val.split('-',1); start=int(start_s) if start_s else max(0,size-int(end_s)); end=int(end_s) if end_s else size-1
-        if unit!='bytes' or start<0 or end>=size or start>end: raise ValueError()
+        unit,val=rng.split('=',1); start_s,end_s=val.split('-',1)
+        if unit!='bytes' or size==0: raise ValueError()
+        if start_s:
+            start=int(start_s); end=min(int(end_s),size-1) if end_s else size-1
+        else:
+            suffix=int(end_s)
+            if suffix<=0: raise ValueError()
+            start=max(0,size-suffix); end=size-1
+        if start<0 or start>=size or start>end: raise ValueError()
     except ValueError: return Response(status_code=416,headers={'Content-Range':f'bytes */{size}'})
     def iterator():
         with p.open('rb') as f:

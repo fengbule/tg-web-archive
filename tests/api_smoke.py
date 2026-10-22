@@ -16,8 +16,18 @@ from app.main import app,db,tg
 with TestClient(app) as c:
     assert c.get('/health').status_code==200
     assert c.get('/api/dashboard').status_code==401
+    assert c.get('/api/telegram/qr/status').status_code==401
+    assert c.post('/api/telegram/qr/start',json={}).status_code==401
     assert c.post('/api/auth/login',json={'password':'wrong'}).status_code==401
     assert c.post('/api/auth/login',json={'password':'test-password-123'}).status_code==200
+    assert c.post('/api/telegram/qr/start',json={}).status_code==400
+    assert c.post('/api/telegram/qr/start',json={'api_id':1}).status_code==400
+    assert c.post('/api/telegram/qr/start',json={'api_id':1,'api_hash':'invalid'}).status_code==422
+    qr=c.get('/api/telegram/qr/status')
+    assert qr.json()['state']=='idle' and qr.headers['cache-control']=='no-store'
+    assert c.post('/api/telegram/qr/cancel').status_code==200
+    assert c.get('/api/telegram/qr/status?account_id=999999').status_code==404
+    assert c.post('/api/telegram/qr/start?account_id=999999',json={}).status_code==404
     tg.service().save_api(123456,'0123456789abcdef0123456789abcdef')
     denied=c.post('/api/settings/telegram-credentials/reveal',json={'password':'wrong'})
     assert denied.status_code==403 and 'api_hash' not in denied.text.lower()
@@ -50,6 +60,12 @@ with TestClient(app) as c:
     cur=db.execute("insert into media(channel_id,message_id,channel_title,file_name,file_path,size,downloaded_at) values(1,1,'测试','test.mp4',?,10,'now')",(str(f),)); mid=cur.lastrowid
     r=c.get(f'/api/media/{mid}/stream',headers={'Range':'bytes=2-5'}); assert r.status_code==206 and r.content==b'2345' and r.headers['content-range']=='bytes 2-5/10'
     assert r.headers['cache-control']=='private, max-age=3600'
+    suffix=c.get(f'/api/media/{mid}/stream',headers={'Range':'bytes=-4'})
+    assert suffix.status_code==206 and suffix.content==b'6789'
+    clamped=c.get(f'/api/media/{mid}/stream',headers={'Range':'bytes=8-999'})
+    assert clamped.status_code==206 and clamped.content==b'89'
+    assert c.get(f'/api/media/{mid}/stream',headers={'Range':'bytes=10-'}).status_code==416
+    assert c.get(f'/api/media/{mid}/stream',headers={'Range':'bytes=-0'}).status_code==416
     os.environ['USE_X_ACCEL']='true'
     accelerated=c.get(f'/api/media/{mid}/stream')
     assert accelerated.status_code==200 and accelerated.headers['x-accel-redirect'].startswith('/protected-media/')

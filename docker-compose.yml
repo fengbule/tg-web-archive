@@ -15,7 +15,7 @@ services:
     cap_drop:
       - ALL
   nginx:
-    image: nginx:1.27-alpine
+    image: nginx:stable-alpine
     container_name: telegram-video-manager-nginx
     restart: unless-stopped
     depends_on:
