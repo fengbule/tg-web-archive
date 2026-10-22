@@ -2,6 +2,8 @@
 
 本说明对应 2026-10-22 的私人测试部署。仓库初始 `ACCEPTANCE_TEST.md` 是历史报告，不能作为本实例真实 Telegram 登录、下载或上传成功的证据。实际地址、管理员密码、平台连接凭据和验收产物保存在操作者的受保护目录，不提交 Git。
 
+> 2026-10-23 更新：已升级到 `7ba4f2c`，新增 faststart 自动重封装、480P 流畅版、扫码/手机号双登录、深色控制台 UI 和原画/ZIP 下载。本实例默认 `AUTO_SMOOTH=false`，可在媒体库或播放器手动生成流畅版。升级后原账号和 Session 保持 `authorized`，Akile 与 Komari 未改动。详细验收见仓库根 `VALIDATION_20261023.md`。
+
 ## 实例边界
 
 本次已确认目标 InstaBox 为 Debian 13、4 核、约 8 GB 内存，`/data` 独立持久化盘约 20 GB。现有 Akile 使用回环 3000，Komari 为独立 systemd 服务。新应用使用：
