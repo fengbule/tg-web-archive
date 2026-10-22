@@ -243,7 +243,9 @@ class TelegramManager:
         r=self.db.one("SELECT value FROM config WHERE key='active_account_id'")
         try: aid=int(r['value']) if r else 1
         except Exception: aid=1
-        return aid if self.db.one('SELECT 1 x FROM accounts WHERE id=?',(aid,)) else 1
+        if self.db.one('SELECT 1 x FROM accounts WHERE id=?',(aid,)): return aid
+        row=self.db.one('SELECT id FROM accounts ORDER BY id LIMIT 1')
+        return row['id'] if row else 1
     def service(self,account_id=None):
         aid=int(account_id or self.active_id); row=self.db.one('SELECT * FROM accounts WHERE id=?',(aid,))
         if not row: raise ValueError('Telegram 账号不存在')
@@ -289,10 +291,11 @@ class TelegramManager:
     async def remove(self,account_id):
         rows=self.db.all('SELECT id FROM accounts');
         if len(rows)<=1: raise ValueError('至少保留一个 Telegram 账号')
+        was_active=self.active_id==account_id
         svc=self.service(account_id); await svc.logout(clear=True); self.services.pop(account_id,None)
         self.db.execute("DELETE FROM config WHERE key LIKE ?",(f'account:{account_id}:%',))
         if account_id==1:
             self.db.execute("DELETE FROM config WHERE key IN ('api_id','api_hash')")
         self.db.execute('DELETE FROM accounts WHERE id=?',(account_id,))
-        if self.active_id==account_id: self.activate(next(x['id'] for x in rows if x['id']!=account_id))
+        if was_active: self.activate(next(x['id'] for x in rows if x['id']!=account_id))
     async def disconnect_all(self): await asyncio.gather(*(x.disconnect() for x in self.services.values()),return_exceptions=True)

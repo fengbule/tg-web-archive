@@ -60,12 +60,30 @@ with TestClient(app) as c:
     cur=db.execute("insert into media(channel_id,message_id,channel_title,file_name,file_path,size,downloaded_at) values(1,1,'测试','test.mp4',?,10,'now')",(str(f),)); mid=cur.lastrowid
     r=c.get(f'/api/media/{mid}/stream',headers={'Range':'bytes=2-5'}); assert r.status_code==206 and r.content==b'2345' and r.headers['content-range']=='bytes 2-5/10'
     assert r.headers['cache-control']=='private, max-age=3600'
-    suffix=c.get(f'/api/media/{mid}/stream',headers={'Range':'bytes=-4'})
-    assert suffix.status_code==206 and suffix.content==b'6789'
-    clamped=c.get(f'/api/media/{mid}/stream',headers={'Range':'bytes=8-999'})
-    assert clamped.status_code==206 and clamped.content==b'89'
-    assert c.get(f'/api/media/{mid}/stream',headers={'Range':'bytes=10-'}).status_code==416
-    assert c.get(f'/api/media/{mid}/stream',headers={'Range':'bytes=-0'}).status_code==416
+    for value, expected, content_range in [
+        ('bytes=-3', b'789', 'bytes 7-9/10'),
+        ('bytes=-20', b'0123456789', 'bytes 0-9/10'),
+        ('bytes=7-99', b'789', 'bytes 7-9/10'),
+        ('bytes=7-', b'789', 'bytes 7-9/10'),
+    ]:
+        ranged=c.get(f'/api/media/{mid}/stream',headers={'Range':value})
+        assert ranged.status_code==206, value
+        assert ranged.content==expected and ranged.headers['content-range']==content_range, value
+    for value in ('bytes=-0', 'bytes=-', 'bytes=10-', 'bytes=5-2', 'bytes=0-1,4-5', 'bytes=+1-2'):
+        invalid=c.get(f'/api/media/{mid}/stream',headers={'Range':value})
+        assert invalid.status_code==416 and invalid.headers['content-range']=='bytes */10', value
+        assert invalid.headers['cache-control']=='no-store'
+    f.write_bytes(b'')
+    empty=c.get(f'/api/media/{mid}/stream',headers={'Range':'bytes=0-'})
+    assert empty.status_code==416 and empty.headers['content-range']=='bytes */0'
+    f.write_bytes(b'0123456789')
+    partial=root/'temp'/'999.part'; partial.write_bytes(b'partial')
+    db.execute("insert into downloads(id,channel_id,message_id,file_name,status,temp_path,downloaded_bytes,created_at,updated_at) values(999,1,999,'partial.mp4','paused',?,7,'now','now')",(str(partial),))
+    assert c.post('/api/downloads/999/cancel').status_code==200
+    cancelled=db.one('select * from downloads where id=999')
+    assert cancelled['status']=='cancelled' and cancelled['downloaded_bytes']==0 and not partial.exists()
+    assert c.post('/api/downloads/999/cancel').status_code==409
+    assert c.post('/api/downloads/1000/cancel').status_code==409
     os.environ['USE_X_ACCEL']='true'
     accelerated=c.get(f'/api/media/{mid}/stream')
     assert accelerated.status_code==200 and accelerated.headers['x-accel-redirect'].startswith('/protected-media/')
