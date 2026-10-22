@@ -1,4 +1,4 @@
-import asyncio, base64, bcrypt, hashlib, json, logging, os, secrets, shutil
+import asyncio, base64, bcrypt, hashlib, json, logging, os, re, secrets, shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
@@ -70,7 +70,7 @@ async def security(request:Request,call_next):
     except HTTPException as e: return JSONResponse({'detail':str(e.detail)},status_code=e.status_code)
     except Exception:
         log.exception('请求处理失败 path=%s',request.url.path); return JSONResponse({'detail':'操作失败，请稍后重试'},status_code=500)
-    if request.url.path.startswith('/api/media/') and request.url.path.endswith('/stream'):
+    if request.url.path.startswith('/api/media/') and request.url.path.endswith('/stream') and response.status_code in (200,206):
         response.headers['Cache-Control']='private, max-age=3600'
     else: response.headers['Cache-Control']='no-store' if request.url.path.startswith('/api/') else 'no-cache'
     return response
@@ -289,7 +289,9 @@ def queue(items:list[QueueItem]):
 @app.get('/api/downloads')
 def downloads(): return db.all('SELECT * FROM downloads ORDER BY id DESC LIMIT 500')
 @app.post('/api/downloads/{id}/cancel')
-def cancel(id:int): downloader.cancel(id); return {'ok':True}
+def cancel(id:int):
+    if not downloader.cancel(id): raise HTTPException(409,'当前任务不能取消')
+    return {'ok':True}
 @app.post('/api/downloads/{id}/pause')
 def pause_download(id:int):
     if not downloader.pause(id): raise HTTPException(409,'当前任务不能暂停')
@@ -302,8 +304,8 @@ def resume_download(id:int):
 @app.post('/api/downloads/{id}/retry')
 def retry(id:int):
     row=db.one('SELECT temp_path FROM downloads WHERE id=?',(id,)); resumed=bool(row and row.get('temp_path') and Path(row['temp_path']).is_file())
-    downloader.cancelled.discard(id)
-    db.execute("UPDATE downloads SET status='queued',error='',retry_count=0,updated_at=? WHERE id=? AND status IN ('failed','cancelled','paused','retrying')",(now(),id)); return {'ok':True,'resumed':resumed}
+    if not downloader.retry(id): raise HTTPException(409,'当前任务不能重试')
+    return {'ok':True,'resumed':resumed}
 
 @app.get('/api/media')
 def media(q:str='',channel_id:int|None=None,sort:str='time'):
@@ -384,23 +386,27 @@ def thumbnail(id:int):
 @app.get('/api/media/{id}/stream')
 def stream(id:int,request:Request,download:bool=False):
     x,p=media_row(id); size=p.stat().st_size; mime=x['mime']; rng=request.headers.get('range')
+    # Validate before X-Accel as well, so bad ranges get the same non-cacheable
+    # response with or without Nginx acceleration.
+    if rng:
+        try:
+            match=re.fullmatch(r'bytes=([0-9]*)-([0-9]*)',rng)
+            if not match or size==0: raise ValueError()
+            start_s,end_s=match.groups()
+            if not start_s:
+                suffix=int(end_s)
+                if suffix<=0: raise ValueError()
+                start=max(0,size-suffix); end=size-1
+            else:
+                start=int(start_s); end=min(int(end_s),size-1) if end_s else size-1
+                if start>=size or start>end: raise ValueError()
+        except ValueError: return Response(status_code=416,headers={'Content-Range':f'bytes */{size}'})
     headers={'Accept-Ranges':'bytes','Cache-Control':'private, max-age=3600','Content-Disposition':('attachment' if download else 'inline')+f"; filename*=UTF-8''{quote(x['file_name'])}"}
     if os.getenv('USE_X_ACCEL','false').lower()=='true' and MEDIA_ROOT in p.parents:
         relative=quote(p.relative_to(MEDIA_ROOT).as_posix(),safe='/')
         headers['X-Accel-Redirect']='/protected-media/'+relative
         return Response(media_type=mime,headers=headers)
     if not rng: return FileResponse(p,media_type=mime,headers=headers)
-    try:
-        unit,val=rng.split('=',1); start_s,end_s=val.split('-',1)
-        if unit!='bytes' or size==0: raise ValueError()
-        if start_s:
-            start=int(start_s); end=min(int(end_s),size-1) if end_s else size-1
-        else:
-            suffix=int(end_s)
-            if suffix<=0: raise ValueError()
-            start=max(0,size-suffix); end=size-1
-        if start<0 or start>=size or start>end: raise ValueError()
-    except ValueError: return Response(status_code=416,headers={'Content-Range':f'bytes */{size}'})
     def iterator():
         with p.open('rb') as f:
             f.seek(start); remain=end-start+1

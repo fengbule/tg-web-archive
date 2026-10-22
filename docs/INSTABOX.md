@@ -148,7 +148,13 @@ docker run --rm -e PYTHONPATH=/workspace \
   sh -c 'pip install --quiet pytest httpx pip-audit && pytest -q -p no:cacheprovider && python tests/api_smoke.py && pip-audit -r requirements.txt'
 ```
 
-2026-10-22 账号迭代已通过 29 项测试、API 冒烟和依赖审计（0 已知漏洞）。测试涵盖账号创建、配置加密与隔离、切换、重命名、真实授权状态判定、重启后加载 Session 撤销、失败保留 Session、仅暂停目标账号队列、运行中任务保护、删除首账号的回退，以及旧数据库迁移的 ID/自增序列/外键/重复启动。原有队列去重、暂停续传与重启恢复、SQLite 并发、初始化不覆盖密钥、二维码刷新/取消/两步验证分支/错误脱敏/等待上限也通过。API 测试另验证鉴权、修改密码后旧会话失效、凭据查看保护、媒体删除、目录穿越拦截及 Range。
+2026-10-22 融合 `fix/reliability-20261022` 分支后通过 43 项测试、API 冒烟和依赖审计（0 已知漏洞）。测试涵盖账号创建、配置加密与隔离、切换、重命名、真实授权状态判定、重启后加载 Session 撤销、失败保留 Session、仅暂停目标账号队列、运行中任务保护、删除首账号的回退，以及旧数据库迁移的 ID/自增序列/外键/重复启动。原有队列去重、暂停续传与重启恢复、SQLite 并发、初始化不覆盖密钥、二维码刷新/取消/两步验证分支/错误脱敏/等待上限也通过。API 测试另验证鉴权、修改密码后旧会话失效、凭据查看保护、媒体删除、目录穿越拦截及 Range。
+
+本次融合还验证了不完整文件禁止入库、取消暂停/失败/排队任务实际清理 `.part`、断点续传只为剩余字节预留空间。额外修复了传输后读取媒体信息期间的取消/暂停/服务停止：先处理 `.part`，再在任务锁内发布完整文件和入库；中途停止仍能保留可续传文件。真实 ffprobe/ffmpeg 对 `.part` 文件的元数据和缩略图读取也通过。无效的继续或重试请求返回 409，不再清除仍在等待执行的暂停/取消标记。Range 在 X-Accel 转发前校验，直传与 Nginx 加速两种路径均拒绝畸形或超界请求并禁止缓存错误。
+
+可靠性融合本身没有新增数据库结构变更，融合前的多账号版本 `dd9a536` 已使用相同账号唯一键，可按同结构镜像回滚方法退回。更早、尚未迁移账号唯一键的版本仍须恢复配套数据。
+
+融合保留了可靠性分支的历史 [VALIDATION_20261022.md](../VALIDATION_20261022.md)，其中另一实例的测速与备份路径不适用于此 InstaBox；不能混用两份文档的服务器信息。
 
 `tests/accounts_ui_server.py` 是**仅供隔离测试的服务**，强制使用临时数据和模拟 Telegram，不可用于真实部署或发布公网。只将源码与 tests 只读挂载到一次性容器，绑定空闲回环测试端口，不挂生产数据、`.env` 或客户端配置；从测试镜像运行 `python tests/accounts_ui_server.py`。安装 Playwright 后，以 `TEST_URL=http://127.0.0.1:<测试端口> PLAYWRIGHT_MODULE=<playwright/index.mjs的绝对路径> node tests/accounts_ui.mjs` 执行，Chromium 使用 `/usr/bin/chromium`、headless。测试截图写入私有 `/data/workspace/tg-web-archive-e2e/`，该目录须事先创建。
 

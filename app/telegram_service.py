@@ -264,7 +264,9 @@ class TelegramManager:
         r=self.db.one("SELECT value FROM config WHERE key='active_account_id'")
         try: aid=int(r['value']) if r else 1
         except Exception: aid=1
-        return aid if self.db.one('SELECT 1 x FROM accounts WHERE id=?',(aid,)) else self.db.one('SELECT id FROM accounts ORDER BY id LIMIT 1')['id']
+        if self.db.one('SELECT 1 x FROM accounts WHERE id=?',(aid,)): return aid
+        row=self.db.one('SELECT id FROM accounts ORDER BY id LIMIT 1')
+        return row['id'] if row else 1
     def service(self,account_id=None):
         aid=int(account_id or self.active_id); row=self.db.one('SELECT * FROM accounts WHERE id=?',(aid,))
         if not row: raise ValueError('Telegram 账号不存在')
