@@ -49,6 +49,7 @@ try{
   assert.equal(await page.locator('#qualityButton').innerText(),'原画','waiting must never lower quality');
   await page.evaluate(()=>document.querySelector('#player').dispatchEvent(new Event('canplay')));
   assert.ok(await page.locator('#modalBody').evaluate(v=>v.scrollHeight<=v.clientHeight+1),'desktop player controls must fit without scrolling');
+  assert.ok(await page.locator('#player').evaluate(v=>v.getBoundingClientRect().height<=document.querySelector('#playerStage').getBoundingClientRect().height+1),'video must fit stage without cropping');
   await page.screenshot({path:'/data/workspace/tg-web-archive-e2e/player-refined-desktop.png',fullPage:true});
   for(const width of [390,320]){
     await page.setViewportSize({width,height:844});
@@ -92,4 +93,3 @@ try{
 }catch(error){
   console.error(await page?.locator('body').innerText());console.error(await page.evaluate(()=>Object.fromEntries(['modalBody','playerShell','playerStage','playerSpinner'].map(id=>{const e=document.getElementById(id);return [id,e?{rect:e.getBoundingClientRect().toJSON(),height:e.clientHeight,scroll:e.scrollHeight,maxHeight:getComputedStyle(e).maxHeight,opacity:getComputedStyle(e).opacity,class:e.className}:null]}))));throw error;
 }finally{await browser.close()}
-
