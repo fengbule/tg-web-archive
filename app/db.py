@@ -35,6 +35,7 @@ class Database:
           smooth_status TEXT NOT NULL DEFAULT 'idle',smooth_progress REAL NOT NULL DEFAULT 0,
           smooth_error TEXT NOT NULL DEFAULT '',smooth_size INTEGER NOT NULL DEFAULT 0,
           original_hls_status TEXT NOT NULL DEFAULT 'pending',original_hls_error TEXT NOT NULL DEFAULT '',
+          preview_status TEXT NOT NULL DEFAULT 'pending',
           FOREIGN KEY(download_id) REFERENCES downloads(id) ON DELETE SET NULL,UNIQUE(account_id,channel_id,message_id));
         CREATE TABLE IF NOT EXISTS outbox(
           id INTEGER PRIMARY KEY AUTOINCREMENT,account_id INTEGER NOT NULL,peer_id INTEGER NOT NULL,
@@ -51,6 +52,7 @@ class Database:
                                       ('media','smooth_status',"TEXT NOT NULL DEFAULT 'idle'"),('media','smooth_progress','REAL NOT NULL DEFAULT 0'),
                                       ('media','smooth_error',"TEXT NOT NULL DEFAULT ''"),('media','smooth_size','INTEGER NOT NULL DEFAULT 0'),
                                       ('media','original_hls_status',"TEXT NOT NULL DEFAULT 'pending'"),('media','original_hls_error',"TEXT NOT NULL DEFAULT ''"),
+                                      ('media','preview_status',"TEXT NOT NULL DEFAULT 'pending'"),
                                       ('outbox','telegram_message_id','INTEGER')]:
                 cols={x['name'] for x in c.execute(f'PRAGMA table_info({table})').fetchall()}
                 if column not in cols: c.execute(f'ALTER TABLE {table} ADD COLUMN {column} {decl}')

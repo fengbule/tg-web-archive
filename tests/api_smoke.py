@@ -22,6 +22,19 @@ with TestClient(app) as c:
     assert c.post('/api/telegram/qr/start',json={}).status_code==401
     assert c.post('/api/auth/login',json={'password':'wrong'}).status_code==401
     assert c.post('/api/auth/login',json={'password':'test-password-123'}).status_code==200
+    assert c.get('/api/media/1/preview').status_code==404
+    backup_body={'admin_password':'wrong-password','backup_password':'test-backup-password-123'}
+    assert c.post('/api/accounts/backup/export',json=backup_body).status_code==403
+    backup_body['admin_password']='test-password-123'
+    exported=c.post('/api/accounts/backup/export',json=backup_body)
+    assert exported.status_code==200 and exported.headers['cache-control']=='no-store'
+    assert 'attachment' in exported.headers['content-disposition']
+    assert c.post('/api/accounts/backup/import',json={**backup_body,'backup':'{}'}).status_code==400
+    imported=c.post('/api/accounts/backup/import',json={**backup_body,'backup':exported.text})
+    assert imported.status_code==200 and imported.json()['imported']==1
+    # Only a disconnected, unconfigured disposable slot was imported.
+    assert not tg.service(imported.json()['account_ids'][0]).api_configured()
+    db.execute('DELETE FROM accounts WHERE id=?',(imported.json()['account_ids'][0],))
     assert c.post('/api/telegram/qr/start',json={}).status_code==400
     assert c.post('/api/telegram/qr/start',json={'api_id':1}).status_code==400
     assert c.post('/api/telegram/qr/start',json={'api_id':1,'api_hash':'invalid'}).status_code==422

@@ -31,6 +31,19 @@ try{
   });
   await page.waitForFunction(()=>document.querySelector('#player').currentTime>7);
   assert.ok(await page.locator('#seekPreview').isVisible());
+  await page.locator('.seek-frame').waitFor({state:'visible'});
+  assert.ok(await page.locator('.seek-frame').evaluate(x=>x.style.backgroundImage.includes('/preview/sheet-')));
+  const writes=await page.evaluate(async()=>{
+    const v=document.querySelector('#player'),input=document.querySelector('#seekInput');
+    const property=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'currentTime');let writes=0;
+    Object.defineProperty(v,'currentTime',{configurable:true,get(){return property.get.call(v)},set(time){writes++;property.set.call(v,time)}});
+    for(let n=0;n<12;n++) {input.value=String(4000+n*200);input.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,35))}
+    const whileMoving=writes;input.dispatchEvent(new Event('change',{bubbles:true}));const onRelease=writes;
+    delete v.currentTime;return {whileMoving,onRelease};
+  });
+  assert.equal(writes.whileMoving,0,'moving thumbnails should not fetch abandoned full-quality targets');
+  assert.equal(writes.onRelease,1,'release should submit the latest original target once');
+  await page.locator('#seekInput').dispatchEvent('pointerdown',{pointerType:'touch',pointerId:2});
   await page.evaluate(()=>{
     const input=document.querySelector('#seekInput');for(const value of ['5000','6000','7000']){input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}))}
     window.dispatchEvent(new PointerEvent('pointerup',{pointerType:'touch',pointerId:1}));
@@ -74,6 +87,7 @@ try{
     await page.waitForTimeout(45);
   }
   assert.ok(await page.locator('#seekPreview').isVisible());
+  await page.waitForTimeout(230);
   assert.ok(await page.locator('#player').evaluate(v=>v.currentTime>10),'touch movement must seek while held');
   await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
   await page.waitForFunction(()=>!document.querySelector('#player').seeking);

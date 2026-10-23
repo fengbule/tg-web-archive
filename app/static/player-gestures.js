@@ -3,7 +3,7 @@
   'use strict';
   scope.attachMediaScrubber = function ({ video, input, stage, preview, finish, changed }) {
     const listeners = [];
-    let timer = null, lastSeek = 0, pending = null, dragging = false;
+    let timer = null, pending = null, dragging = false;
     let resume = false, gesture = null, suppressClickUntil = 0;
     const on = (node, event, callback, options) => {
       node.addEventListener(event, callback, options);
@@ -15,16 +15,15 @@
       if (pending === null || !Number.isFinite(video.duration)) return;
       const target = pending; pending = null;
       video.currentTime = target;
-      lastSeek = performance.now();
       changed?.(target);
     };
     const request = time => {
       pending = clamp(time);
       preview(pending, true);
-      if (!timer) {
-        const delay = Math.max(0, 120 - (performance.now() - lastSeek));
-        timer = setTimeout(apply, delay);
-      }
+      // Show thumbnails on every move, but don't repeatedly fetch abandoned
+      // full-quality GOPs. A brief hold seeks while pressed; release flushes.
+      clearTimeout(timer);
+      timer = setTimeout(apply, 180);
     };
     const begin = () => {
       if (dragging) return;

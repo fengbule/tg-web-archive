@@ -4,12 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#070a12">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="dark light">
+<script src="/theme.js?v=1"></script>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Nebula · Telegram 私人中心</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%236d8bff'/%3E%3Cstop offset='1' stop-color='%2334d6c5'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cpath d='M12 9.5v13l10-6.5-10-6.5Z' fill='%23071018'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/style.css?v=24">
+<link rel="stylesheet" href="/style.css?v=25">
+<link rel="stylesheet" href="/themes.css?v=1">
 </head>
 <body>
 <svg class="icon-sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -43,6 +45,7 @@
 </svg>
 
 <div id="login" class="login">
+  <button class="theme-toggle login-theme ghost" data-theme-toggle onclick="toggleTheme()" aria-label="切换主题" type="button"></button>
   <div class="login-aurora" aria-hidden="true"><i></i><i></i><i></i></div>
   <div class="login-shell">
     <section class="login-hero">
@@ -105,6 +108,7 @@
       <button id="menu" class="icon-btn" aria-label="打开菜单"><svg><use href="#i-menu"/></svg></button>
       <div class="page-head"><h2 id="pageTitle">仪表盘</h2><p id="subtitle">服务器与媒体概况</p></div>
       <div class="header-actions">
+        <button class="theme-toggle ghost" data-theme-toggle onclick="toggleTheme()" aria-label="切换主题" type="button"></button>
         <div class="account-switch"><span class="switch-dot"></span><select id="accountSelector" aria-label="当前 Telegram 账号"></select><button class="ghost manage-accounts-button" onclick="go('accounts')" aria-label="管理 Telegram 账号">管理</button></div>
         <div id="diskBadge" class="badge"><svg><use href="#i-cloud"/></svg>系统正常</div>
       </div>
@@ -125,7 +129,9 @@
 <script src="/accounts.js?v=2"></script>
 <script src="/app.js?v=29"></script>
 <script src="/vendor/hls.light.min.js?v=1.7.3"></script>
-<script src="/player-gestures.js?v=1"></script>
-<script src="/premium.js?v=5"></script>
+<script src="/player-gestures.js?v=2"></script>
+<script src="/seek-preview.js?v=1"></script>
+<script src="/account-backup.js?v=1"></script>
+<script src="/premium.js?v=6"></script>
 </body>
 </html>

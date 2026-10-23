@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import json
+import math
 import os
 import shutil
 from pathlib import Path
@@ -53,6 +55,10 @@ class Transcoder:
         # Recover interrupted work without losing the user-visible state.
         self.db.execute("UPDATE media SET faststart=0 WHERE faststart=-1")
         self.db.execute("UPDATE media SET original_hls_status='pending' WHERE original_hls_status='preparing'")
+        self.db.execute("UPDATE media SET preview_status='pending' WHERE preview_status='preparing'")
+        for row in self.db.all("SELECT id FROM media WHERE preview_status='ready'"):
+            if not (self.preview_directory(row['id']) / 'index.json').is_file():
+                self.db.execute("UPDATE media SET preview_status='pending' WHERE id=?", (row['id'],))
         for row in self.db.all("SELECT id FROM media WHERE original_hls_status='ready'"):
             if not (self.original_directory(row['id']) / 'layout-v2').is_file():
                 self.db.execute("UPDATE media SET original_hls_status='pending' WHERE id=?", (row['id'],))
@@ -109,8 +115,8 @@ class Transcoder:
             try:
                 row = self.db.one(
                     "SELECT * FROM media "
-                    "WHERE faststart=0 OR smooth_status='queued' OR original_hls_status='pending' "
-                    "ORDER BY CASE WHEN smooth_status='queued' THEN 0 ELSE 1 END, id LIMIT 1"
+                    "WHERE faststart=0 OR smooth_status='queued' OR original_hls_status='pending' OR preview_status='pending' "
+                    "ORDER BY CASE WHEN faststart=0 OR original_hls_status='pending' THEN 0 WHEN preview_status='pending' THEN 1 ELSE 2 END, id LIMIT 1"
                 )
                 if not row:
                     await asyncio.sleep(2)
@@ -127,7 +133,7 @@ class Transcoder:
         path = Path(row["file_path"])
         if not path.is_file():
             self.db.execute(
-                "UPDATE media SET faststart=2, smooth_status='failed', smooth_error='源文件不存在', original_hls_status='failed' WHERE id=?",
+                "UPDATE media SET faststart=2, smooth_status='failed', smooth_error='源文件不存在', original_hls_status='failed', preview_status='failed' WHERE id=?",
                 (media_id,),
             )
             return
@@ -140,6 +146,10 @@ class Transcoder:
             if row and row.get('original_hls_status') == 'pending':
                 self.phase = 'original'
                 await self._original(row, Path(row['file_path']))
+                row = self.db.one('SELECT * FROM media WHERE id=?', (media_id,))
+            if row and row.get('preview_status') == 'pending':
+                self.phase = 'preview'
+                await self._preview(row, Path(row['file_path']))
                 row = self.db.one('SELECT * FROM media WHERE id=?', (media_id,))
             if row and row.get("smooth_status") == "queued":
                 self.phase = 'smooth'
@@ -288,6 +298,59 @@ class Transcoder:
     def original_directory(self, media_id):
         return self.root / 'media' / '.streams' / str(int(media_id))
 
+    def preview_directory(self, media_id):
+        return self.root / 'thumbnails' / 'seek-v1' / str(int(media_id))
+
+    async def _preview(self, row, path):
+        """Small contact sheets are separate from the original A/V stream."""
+        media_id = int(row['id'])
+        destination = self.preview_directory(media_id)
+        temp = destination.with_name(destination.name + '.tmp')
+        self.db.execute("UPDATE media SET preview_status='preparing' WHERE id=?", (media_id,))
+        try:
+            reserve = max(2, float(os.getenv('MIN_FREE_GB', '2'))) * 1024**3
+            if shutil.disk_usage(self.root).free < reserve + 32 * 1024**2:
+                raise RuntimeError('缩略图空间不足')
+            duration = float(row.get('duration') or 0)
+            if duration <= 0:
+                duration = (await asyncio.to_thread(probe_media, path))['duration']
+            # Bound CPU/storage even for very long recordings. Decode only key
+            # frames; previews are approximate, the player seeks the exact time.
+            interval = max(8, math.ceil(duration / 900))
+            frames = max(1, math.floor(duration / interval))
+            sheets = math.ceil(frames / 64)
+            shutil.rmtree(temp, ignore_errors=True)
+            temp.mkdir(parents=True)
+            filters = (f'fps=1/{interval}:start_time=0:round=up,'
+                       'scale=160:90:force_original_aspect_ratio=decrease,'
+                       'pad=160:90:(ow-iw)/2:(oh-ih)/2,setsar=1,tile=8x8')
+            command = ['ffmpeg','-nostdin','-y','-hide_banner','-loglevel','error',
+                       '-threads','1','-skip_frame','nokey','-i',str(path),'-an',
+                       '-vf',filters,'-frames:v',str(sheets),'-threads','1','-q:v','5',
+                       '-progress','pipe:1','-nostats',str(temp/'sheet-%03d.jpg')]
+            def progress(text):
+                if text.startswith('progress=') and shutil.disk_usage(self.root).free < reserve:
+                    raise RuntimeError('缩略图已到达磁盘保护线')
+            await self._run(command, progress, timeout=3600)
+            images = sorted(temp.glob('sheet-*.jpg'))
+            if not images or any(p.stat().st_size == 0 for p in images):
+                raise RuntimeError('缩略图生成失败')
+            # Conservative tail clamp avoids selecting empty cells in a partial
+            # sheet. The fps filter holds the latest decoded key frame.
+            frames = min(frames, len(images) * 64)
+            (temp/'index.json').write_text(json.dumps({'interval':interval,'frames':frames,
+                'width':160,'height':90,'columns':8,'rows':8,'sheets':[p.name for p in images]}))
+            if not self._source_unchanged(media_id, path):
+                return
+            shutil.rmtree(destination, ignore_errors=True)
+            os.replace(temp, destination)
+            self.db.execute("UPDATE media SET preview_status='ready' WHERE id=?", (media_id,))
+        except Exception:
+            log.warning('拖动预览生成失败 id=%s，保留时间预览', media_id)
+            self.db.execute("UPDATE media SET preview_status='failed' WHERE id=?", (media_id,))
+        finally:
+            shutil.rmtree(temp, ignore_errors=True)
+
     async def _original(self, row, path):
         media_id = int(row['id'])
         destination = self.original_directory(media_id)
@@ -330,3 +393,6 @@ class Transcoder:
             directory = self.original_directory(media_id)
             shutil.rmtree(directory, ignore_errors=True)
             shutil.rmtree(directory.with_name(directory.name + '.tmp'), ignore_errors=True)
+            preview = self.preview_directory(media_id)
+            shutil.rmtree(preview, ignore_errors=True)
+            shutil.rmtree(preview.with_name(preview.name + '.tmp'), ignore_errors=True)

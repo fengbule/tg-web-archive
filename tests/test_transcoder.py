@@ -12,6 +12,39 @@ from app.transcoder import Transcoder
 
 
 @pytest.mark.skipif(not shutil.which('ffmpeg'), reason='ffmpeg is required')
+def test_storyboards_keep_source_and_match_manifest(tmp_path):
+    import hashlib, json
+    db, worker, source=make_optimizer(tmp_path)
+    try:
+        subprocess.run(['ffmpeg','-nostdin','-y','-v','error','-f','lavfi','-i',
+            'testsrc2=size=320x180:rate=12','-t','24','-c:v','libx264','-g','24',str(source)],check=True)
+        db.execute('UPDATE media SET duration=24')
+        before=hashlib.sha256(source.read_bytes()).hexdigest()
+        asyncio.run(worker._preview(db.one('SELECT * FROM media'),source))
+        assert db.one('SELECT preview_status FROM media')['preview_status']=='ready'
+        directory=worker.preview_directory(1); data=json.loads((directory/'index.json').read_text())
+        assert data['frames']==3 and data['interval']==8
+        assert len(data['sheets'])==1 and data['columns']==8
+        sheet=directory/data['sheets'][0]
+        assert probe_media(sheet)['width']==1280 and probe_media(sheet)['height']==720
+        assert hashlib.sha256(source.read_bytes()).hexdigest()==before
+        worker.delete_variants(source,1)
+        assert source.is_file() and not directory.exists()
+    finally: db.close()
+
+
+def test_storyboard_low_disk_falls_back_without_source_changes(tmp_path,monkeypatch):
+    db,worker,source=make_optimizer(tmp_path)
+    monkeypatch.setattr('app.transcoder.shutil.disk_usage',lambda _:SimpleNamespace(free=0))
+    try:
+        asyncio.run(worker._preview(db.one('SELECT * FROM media'),source))
+        assert db.one('SELECT preview_status FROM media')['preview_status']=='failed'
+        assert source.read_bytes()==b'original-video'
+        assert not worker.preview_directory(1).exists()
+    finally: db.close()
+
+
+@pytest.mark.skipif(not shutil.which('ffmpeg'), reason='ffmpeg is required')
 def test_original_segments_keep_encoded_av_and_timing(tmp_path):
     """Exercise real AAC/H264 muxing, not just command construction."""
     import hashlib

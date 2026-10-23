@@ -260,7 +260,7 @@
           <button class="player-bigplay" id="bigPlay" type="button" aria-label="播放">${icon('play')}</button>
           <button class="skip-button" id="skipForward" type="button" aria-label="前进 10 秒">${icon('refresh')}<span>10</span></button>
         </div>
-        <div class="seek-preview" id="seekPreview" hidden><b></b><small>松手后继续 · 横滑可精细定位</small></div>
+        <div class="seek-preview" id="seekPreview" hidden><div class="seek-frame" role="img" aria-label="目标时间附近的画面预览" hidden></div><b></b><small>松手后继续 · 横滑可精细定位</small></div>
         <div class="buffer-status" id="bufferStatus" hidden>正在准备原画…</div>
       </div>
       <div class="player-controls">
@@ -289,6 +289,7 @@
     const seek = $('#seekInput'), played = $('#seekPlayed'), buffered = $('#seekBuffer'), thumb = $('#seekThumb');
     const qualityButton = $('#qualityButton'), smoothButton = $('#smoothButton'), downloadButton = $('#downloadButton');
     let scrubber;
+    const storyboard = createSeekPreview(id, $('#seekPreview'));
     const preview = (at, active = false) => {
       const d = Number(video.duration) || Number(x.duration) || 0;
       const percentage = pct(at, d);
@@ -300,6 +301,7 @@
       $('#seekWrap').classList.toggle('active', active);
       $('#seekPreview').hidden = !active;
       if (active) $('#seekPreview b').textContent = duration(at);
+      storyboard.show(at, active);
     };
     const paint = () => {
       if (closed || scrubber?.dragging()) return;
@@ -334,7 +336,7 @@
       const nativePreferred = /iP(?:hone|ad|od)/.test(agent) || (/Safari/.test(agent) && !/Chrome|Chromium|Edg|OPR|Android/.test(agent));
       if (original && !nativePreferred && window.Hls?.isSupported()) {
         hls = new Hls({ autoStartLoad: false, startPosition: at, enableWorker: true, progressive: true,
-          maxBufferLength: 24, maxMaxBufferLength: 48, maxBufferSize: 32 * 1024 * 1024, backBufferLength: 30 });
+          maxBufferLength: 16, maxMaxBufferLength: 32, maxBufferSize: 24 * 1024 * 1024, backBufferLength: 30 });
         const instance = hls;
         instance.on(Hls.Events.MEDIA_ATTACHED, () => { if (run === sourceRun) instance.loadSource(url); });
         instance.on(Hls.Events.MANIFEST_PARSED, () => { if (run === sourceRun) instance.startLoad(at); });
@@ -440,7 +442,7 @@
     const backdrop = event => { if (event.target.id === 'modal') close(); };
     const close = () => {
       if (closed) return;
-      closed = true; sourceRun++; clearInterval(smoothTimer); scrubber.destroy();
+      closed = true; sourceRun++; clearInterval(smoothTimer); scrubber.destroy(); storyboard.destroy();
       try { localStorage.setItem('tvm-pos-' + id, String(restorePosition ?? video.currentTime)); } catch {}
       hls?.destroy(); hls = null; video.pause(); video.removeAttribute('src'); video.load();
       document.removeEventListener('keydown', keyHandler); $('#modal').removeEventListener('click', backdrop);
@@ -692,14 +694,15 @@
     const rows = await loadAccounts();
     if (activePage !== 'accounts') return;
     content.innerHTML = `<div class="account-page">
-      <div class="account-page-heading"><div><h3>Telegram 账号</h3><p class="muted">每个账号使用独立 Session，可分别扫码或 API 登录，随时切换。</p></div><button id="addAccountButton" onclick="addAccount()">${icon('plus')} 添加账号</button></div>
+      <div class="account-page-heading"><div><h3>Telegram 账号</h3><p class="muted">独立登录 · 加密备份 · 跨服务器迁移</p></div><div class="account-tools"><button class="ghost" onclick="openAccountBackup()">${icon('download')} 导出备份</button><button class="ghost" onclick="openAccountRestore()">${icon('refresh')} 导入账号</button><button id="addAccountButton" onclick="addAccount()">${icon('plus')} 添加账号</button></div></div>
       <div class="account-list">${rows.map((a) => `<article class="card account-card ${a.active ? 'is-current' : ''}" data-account-id="${a.id}">
         <div class="account-avatar">${esc((a.label || '?').trim().slice(0, 1))}</div>
-        <div class="account-details"><h3>${esc(a.label)} ${a.active ? '<span class="current-account-badge">当前账号</span>' : ''}</h3><p>${esc(a.name || '')}${a.phone ? ' · ' + esc(a.phone) : ''}</p><span class="account-state ${a.authorized ? 'connected' : ''}">${a.status === 'unavailable' ? '状态暂不可用，请刷新' : a.authorized ? '● 已登录' : '○ 未登录'}</span></div>
+        <div class="account-details"><h3>${esc(a.label)} ${a.active ? '<span class="current-account-badge">当前账号</span>' : ''}</h3><p>${esc(a.name || '')}${a.phone ? ' · ' + esc(a.phone) : ''}</p><span class="account-state ${a.authorized ? 'connected' : ''}">${a.restore_pending ? '已恢复 · 切换后连接' : a.status === 'unavailable' ? '状态暂不可用，请刷新' : a.authorized ? '● 已登录' : '○ 未登录'}</span></div>
         <div class="account-card-actions">
           ${a.active ? '' : `<button class="ghost" onclick="switchAccount(${a.id})">切换账号</button>`}
-          ${!a.authorized ? `<button onclick="pAccountLogin(${a.id})">${icon('zap')} 扫码 / API 登录</button>` : ''}
+          ${!a.authorized && !a.restore_pending ? `<button onclick="pAccountLogin(${a.id})">${icon('zap')} 扫码 / API 登录</button>` : ''}
           <button class="ghost" data-action="rename" onclick="renameAccount(${a.id})">重命名</button>
+          <button class="ghost" data-action="backup" onclick="openAccountBackup(${a.id})">导出账号</button>
           ${a.authorized !== false || a.session_exists ? `<button class="ghost ghost-danger" data-action="logout" onclick="endAccountSession(${a.id})">结束会话</button>` : ''}
           ${rows.length > 1 ? `<button class="ghost" data-action="remove" onclick="removeAccount(${a.id})">移除账号</button>` : ''}
         </div>
@@ -722,12 +725,13 @@
     credentialUsesSeparatePassword = security.has_view_password;
     content.innerHTML = `
       <div class="grid" style="margin-top:0">
+        <div class="card setting-card"><div class="section-title">外观与备份</div><p class="muted" style="margin-top:8px">明暗主题在此设备自动记住。账号备份可迁移到另一台部署，恢复时保留原有账号。</p><div class="actions"><button class="ghost" onclick="toggleTheme()">切换明暗主题</button><button class="ghost" onclick="openAccountBackup()">导出账号</button><button class="ghost" onclick="openAccountRestore()">导入备份</button></div></div>
         <div class="card setting-card"><div class="section-title">${icon('users')} 当前 Telegram 账号</div><p style="margin-top:8px">${s.authorized ? '已登录：' + esc(s.name || '') + (s.phone ? '（' + esc(s.phone) + '）' : '') : '尚未登录'}</p><div class="actions">${s.authorized ? '<button class="ghost-danger ghost" onclick="tgLogout()">结束当前会话</button>' : '<button onclick="go(\'telegram\')">去登录 Telegram</button>'}<button class="ghost" onclick="go('accounts')">管理 ${accounts.length} 个账号</button></div></div>
         <div class="card setting-card"><div class="section-title">${icon('cloud')} 运行状态</div><p style="margin-top:8px">Web 服务正常 · 数据盘正常 · 下载 worker 2 个<br><span class="muted">数据目录 /data/telegram-video-manager<br>剩余空间 ${fmt(d.disk.free)}</span></p></div>
       </div>
       <div class="card setting-card security-card"><div><div class="section-title">${icon('shield')} 密码与安全</div><p class="muted" style="margin-top:6px">管理员密码用于登录后台；查看密码只用于显示 API ID/API Hash。修改管理员密码后所有旧登录会立即失效。</p></div><div class="password-actions"><button onclick="changeAdminPassword()">修改管理员密码</button><button class="ghost" onclick="changeViewPassword()">${security.has_view_password ? '修改查看密码' : '设置独立查看密码'}</button>${security.has_view_password ? '<button class="ghost" onclick="resetViewPassword()">恢复使用管理员密码查看</button>' : ''}</div><span class="status">查看凭据：${security.has_view_password ? '使用独立查看密码' : '使用管理员密码'}</span></div>
       <div class="card setting-card credential-card"><div class="grow"><div class="section-title">${icon('key')} Telegram API 凭据</div><p class="muted">${s.configured ? '当前账号已加密保存 API ID 和 API Hash。查看时需要输入' + (security.has_view_password ? '独立查看密码' : '管理员密码') + '。' : '当前账号尚未配置 API 凭据，可在 Telegram 登录页填写。'}</p></div>${s.configured ? '<button onclick="revealTelegramCredentials()">查看 / 复制</button>' : '<button onclick="go(\'telegram\')">去配置</button>'}</div>
-      <div class="card setting-card"><div class="section-title">${icon('zap')} 播放与转码</div><p style="margin-top:8px">新下载的 MP4 会自动把索引移动到文件头（faststart），拖动进度更快。流畅 480P 在后台生成，生成完成后可在播放器一键切换。</p><div class="actions"><button class="ghost" onclick="go('library')">打开媒体库查看优化状态</button></div></div>
+      <div class="card setting-card"><div class="section-title">${icon('zap')} 原画与拖动预览</div><p style="margin-top:8px">默认原画，同一播放器同步播放声音与画面。后台生成原编码分片和画面切片，拖动时即时预览；停留或松手后加载目标原画。也可手动生成并切换流畅版。</p><div class="actions"><button class="ghost" onclick="go('library')">打开媒体库</button></div></div>
       <div class="card setting-card"><div class="section-title">${icon('download')} 存储维护</div><p style="margin-top:8px">只清理本项目临时下载目录，不会触碰正式视频和服务器其他文件。</p><div class="actions"><button class="ghost-danger ghost" onclick="cleanupTemp()">清理临时文件</button><button class="ghost" onclick="go('downloads')">查看下载任务</button></div></div>`;
   };
 

@@ -56,9 +56,12 @@ class FakeClient:
 
 telegram.TelegramClient=FakeClient
 from app.main import app,tg
-svc=tg.service(); svc.save_api(123456,'fixture-api-hash')
+svc=tg.service(); svc.save_api(123456,'a'*32)
 states[str(svc.session_dir/svc.session_name)]=True
-(svc.session_dir/(svc.session_name+'.session')).touch()
+from telethon.sessions import SQLiteSession
+from telethon.crypto import AuthKey
+session=SQLiteSession(str(svc.session_dir/(svc.session_name+'.session')))
+session.set_dc(2,'149.154.167.40',443);session.auth_key=AuthKey(b'x'*256);session.save();session.close()
 
 # A real, muxed A/V file in this disposable DATA_ROOT exercises HLS and seeking.
 import subprocess

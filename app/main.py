@@ -14,6 +14,7 @@ from .downloader import Downloader
 from .outbox import OutboxSender
 from .transcoder import Transcoder
 from .zipstream import zip_media_files
+from .account_backup import collect_accounts, encrypt_backup, decrypt_backup, restore_accounts, MAX_BACKUP_BYTES
 
 logging.basicConfig(level=os.getenv('LOG_LEVEL','INFO'),format='%(asctime)s %(levelname)s %(name)s %(message)s')
 log=logging.getLogger('tvm')
@@ -157,6 +158,33 @@ def reset_view_password(body:AdminPasswordConfirm):
     db.execute("DELETE FROM config WHERE key='credential_view_password_pbkdf2'"); return {'ok':True}
 @app.get('/api/accounts')
 async def accounts(): return await tg.list_accounts()
+class AccountBackupRequest(BaseModel):
+    admin_password:str=Field(min_length=1,max_length=200)
+    backup_password:str=Field(min_length=12,max_length=200)
+    account_ids:list[int]|None=Field(default=None,min_length=1,max_length=100)
+class AccountRestoreRequest(BaseModel):
+    admin_password:str=Field(min_length=1,max_length=200)
+    backup_password:str=Field(min_length=12,max_length=200)
+    backup:str=Field(min_length=1,max_length=MAX_BACKUP_BYTES)
+@app.post('/api/accounts/backup/export')
+async def export_accounts(body:AccountBackupRequest):
+    if not await asyncio.to_thread(check_admin_password,body.admin_password): raise HTTPException(403,'管理员密码错误')
+    try:
+        payload=collect_accounts(tg,body.account_ids)
+        content=await asyncio.to_thread(encrypt_backup,payload,body.backup_password)
+    except ValueError as e: raise HTTPException(400,str(e)) from None
+    except Exception: raise HTTPException(409,'账号授权暂不可读取，请稍后重试') from None
+    return Response(content,media_type='application/octet-stream',headers={
+        'Content-Disposition':'attachment; filename="nebula-accounts-'+now()[:10]+'.nebula"',
+        'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+@app.post('/api/accounts/backup/import')
+async def import_accounts(body:AccountRestoreRequest):
+    if not await asyncio.to_thread(check_admin_password,body.admin_password): raise HTTPException(403,'管理员密码错误')
+    try:
+        rows=await asyncio.to_thread(decrypt_backup,body.backup,body.backup_password)
+        return restore_accounts(tg,rows)
+    except ValueError as e: raise HTTPException(400,str(e)) from None
+    except Exception: raise HTTPException(409,'恢复未完成，已有账号保持不变，请检查备份后重试') from None
 class AccountCreate(BaseModel): label:str=Field(min_length=1,max_length=40)
 @app.post('/api/accounts')
 def account_create(b:AccountCreate):
@@ -440,6 +468,25 @@ def playback(id:int):
     return {'original':{'type':'hls' if ready else 'file',
             'url':f'/api/media/{id}/hls/v2/index.m3u8' if ready else f'/api/media/{id}/stream?quality=original'},
             'status':x['original_hls_status']}
+
+@app.get('/api/media/{id}/preview')
+def seek_preview(id:int):
+    x,_=media_row(id)
+    index=transcoder.preview_directory(id)/'index.json'
+    if x['preview_status']!='ready' or not index.is_file():
+        return {'status':x['preview_status']}
+    data=json.loads(index.read_text())
+    data['sheets']=[f'/api/media/{id}/preview/{name}' for name in data['sheets']]
+    return {'status':'ready',**data}
+
+@app.get('/api/media/{id}/preview/{name}')
+def seek_preview_sheet(id:int,name:str):
+    x,_=media_row(id)
+    if x['preview_status']!='ready' or not re.fullmatch(r'sheet-[0-9]{3}\.jpg',name):
+        raise HTTPException(404,'预览不存在')
+    path=transcoder.preview_directory(id)/name
+    if not path.is_file(): raise HTTPException(404,'预览不存在')
+    return FileResponse(path,media_type='image/jpeg',headers={'X-Content-Type-Options':'nosniff'})
 
 @app.get('/api/media/{id}/hls/v2/{name}')
 def original_hls(id:int,name:str):

@@ -309,6 +309,10 @@ class TelegramManager:
             service=self.service(x['id']); x['active']=x['id']==active; x['configured']=service.api_configured()
             x['session_exists']=(self.session_dir/(x.pop('session_name')+'.session')).exists()
             x['authorized']=False; x['status']='signed_out'
+            x['restore_pending']=service._cfg('restore_pending')=='1'
+            if x['restore_pending']:
+                x['authorized']=None; x['status']='restored'
+                return
             if not x['session_exists'] and service.client is None: return
             try:
                 state=await asyncio.wait_for(service.status(),timeout=8)
@@ -331,6 +335,7 @@ class TelegramManager:
         return aid
     def activate(self,account_id):
         if not self.db.one('SELECT 1 x FROM accounts WHERE id=?',(account_id,)): raise ValueError('Telegram 账号不存在')
+        self.db.execute('DELETE FROM config WHERE key=?',(f'account:{account_id}:restore_pending',))
         self.db.execute("INSERT OR REPLACE INTO config(key,value) VALUES('active_account_id',?)",(str(account_id),))
     async def remove(self,account_id):
         rows=self.db.all('SELECT id FROM accounts');

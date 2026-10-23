@@ -15,3 +15,5 @@ backups/
 *.sqlite*
 *.log
 *.session*
+.nebula
+*.nebula
