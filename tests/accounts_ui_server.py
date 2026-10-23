@@ -60,6 +60,19 @@ svc=tg.service(); svc.save_api(123456,'fixture-api-hash')
 states[str(svc.session_dir/svc.session_name)]=True
 (svc.session_dir/(svc.session_name+'.session')).touch()
 
+# A real, muxed A/V file in this disposable DATA_ROOT exercises HLS and seeking.
+import subprocess
+from app.main import ROOT, db
+from app.db import now
+media=ROOT/'media'/'fixture.mp4'
+subprocess.run(['ffmpeg','-nostdin','-y','-v','error','-f','lavfi','-i',
+    'testsrc2=size=640x360:rate=24','-f','lavfi','-i','sine=frequency=880:sample_rate=48000',
+    '-t','24','-c:v','libx264','-preset','ultrafast','-crf','32','-g','48',
+    '-c:a','aac','-movflags','+faststart',str(media)],check=True)
+db.execute("INSERT INTO media(channel_id,message_id,channel_title,file_name,file_path,size,duration,width,height,downloaded_at,faststart,smooth_status) "
+    "VALUES(1,1,'创作收藏 · Studio','海岸线的二十四秒 · 原画测试.mp4',?,?,24,640,360,?,1,'queued')",
+    (str(media),media.stat().st_size,now()))
+
 @app.post('/__test__/fail-logout/{account_id}')
 def fail_logout(account_id:int):
     svc=tg.service(account_id); failures.add(str(svc.session_dir/svc.session_name)); return {'ok':True}

@@ -1,6 +1,6 @@
 """Single-worker media optimizer.
 
-Two independent jobs are tracked per media row:
+Three jobs are tracked per media row:
 
 ``faststart``
     0 = pending, -1 = running, 1 = ready, 2 = not applicable/failed.
@@ -8,9 +8,11 @@ Two independent jobs are tracked per media row:
 ``smooth_status``
     idle / queued / processing / ready / failed.
 
-The worker always finishes a fast-start remux before a smooth transcode, so a
-newly downloaded file becomes seekable even when the user never asks for the
-low-bitrate variant.
+``original_hls_status``
+    pending / preparing / ready / unsupported / failed.
+
+The worker prepares fast-start and original A/V segments before the optional
+smooth transcode. Both original paths retain the encoded picture quality.
 """
 
 from __future__ import annotations
@@ -23,6 +25,8 @@ from pathlib import Path
 
 from .media_tools import (
     faststart_command,
+    original_hls_command,
+    probe_streams,
     is_faststart,
     probe_media,
     remove_media_variants,
@@ -48,6 +52,7 @@ class Transcoder:
     async def start(self):
         # Recover interrupted work without losing the user-visible state.
         self.db.execute("UPDATE media SET faststart=0 WHERE faststart=-1")
+        self.db.execute("UPDATE media SET original_hls_status='pending' WHERE original_hls_status='preparing'")
         self.db.execute(
             "UPDATE media SET smooth_status='queued', smooth_error='服务重启后自动继续生成' "
             "WHERE smooth_status='processing'"
@@ -101,7 +106,7 @@ class Transcoder:
             try:
                 row = self.db.one(
                     "SELECT * FROM media "
-                    "WHERE faststart=0 OR smooth_status='queued' "
+                    "WHERE faststart=0 OR smooth_status='queued' OR original_hls_status='pending' "
                     "ORDER BY CASE WHEN smooth_status='queued' THEN 0 ELSE 1 END, id LIMIT 1"
                 )
                 if not row:
@@ -119,7 +124,7 @@ class Transcoder:
         path = Path(row["file_path"])
         if not path.is_file():
             self.db.execute(
-                "UPDATE media SET faststart=2, smooth_status='failed', smooth_error='源文件不存在' WHERE id=?",
+                "UPDATE media SET faststart=2, smooth_status='failed', smooth_error='源文件不存在', original_hls_status='failed' WHERE id=?",
                 (media_id,),
             )
             return
@@ -129,6 +134,10 @@ class Transcoder:
                 self.phase = 'faststart'
                 await self._faststart(row, path)
             row = self.db.one("SELECT * FROM media WHERE id=?", (media_id,))
+            if row and row.get('original_hls_status') == 'pending':
+                self.phase = 'original'
+                await self._original(row, Path(row['file_path']))
+                row = self.db.one('SELECT * FROM media WHERE id=?', (media_id,))
             if row and row.get("smooth_status") == "queued":
                 self.phase = 'smooth'
                 await self._smooth(row, Path(row["file_path"]))
@@ -273,5 +282,47 @@ class Transcoder:
         finally:
             temp.unlink(missing_ok=True)
 
-    def delete_variants(self, path: Path):
+    def original_directory(self, media_id):
+        return self.root / 'media' / '.streams' / str(int(media_id))
+
+    async def _original(self, row, path):
+        media_id = int(row['id'])
+        destination = self.original_directory(media_id)
+        temp = destination.with_name(destination.name + '.tmp')
+        self.db.execute("UPDATE media SET original_hls_status='preparing',original_hls_error='' WHERE id=?", (media_id,))
+        try:
+            streams = await asyncio.to_thread(probe_streams, path)
+            video = next((s for s in streams if s.get('codec_type') == 'video'), {})
+            audio = next((s for s in streams if s.get('codec_type') == 'audio'), {})
+            if video.get('codec_name') not in ('h264', 'hevc') or (audio and audio.get('codec_name') != 'aac'):
+                self.db.execute("UPDATE media SET original_hls_status='unsupported',original_hls_error='原编码使用文件直连播放' WHERE id=?", (media_id,))
+                return
+            reserve = max(2, float(os.getenv('MIN_FREE_GB', '2'))) * 1024**3
+            if shutil.disk_usage(self.root).free < reserve + path.stat().st_size * 1.05:
+                raise RuntimeError('空间不足，继续使用原画文件直连')
+            shutil.rmtree(temp, ignore_errors=True)
+            temp.mkdir(parents=True, mode=0o755)
+            def progress(text):
+                if text.startswith('progress=') and shutil.disk_usage(self.root).free < reserve:
+                    raise RuntimeError('已到达磁盘保护线，继续使用原画文件直连')
+            await self._run(original_hls_command(path, temp), progress)
+            manifest = temp / 'index.m3u8'
+            if not manifest.is_file() or '#EXT-X-ENDLIST' not in manifest.read_text():
+                raise RuntimeError('原画分片未完整生成')
+            if not self._source_unchanged(media_id, path): return
+            # Publish the complete cache atomically; downloads keep the source.
+            shutil.rmtree(destination, ignore_errors=True)
+            os.replace(temp, destination)
+            self.db.execute("UPDATE media SET original_hls_status='ready',original_hls_error='' WHERE id=?", (media_id,))
+        except Exception as exc:
+            log.warning('原画分片失败 id=%s %s', media_id, exc)
+            self.db.execute("UPDATE media SET original_hls_status='failed',original_hls_error=? WHERE id=?", (str(exc)[-300:], media_id))
+        finally:
+            shutil.rmtree(temp, ignore_errors=True)
+
+    def delete_variants(self, path: Path, media_id=None):
         remove_media_variants(Path(path))
+        if media_id is not None:
+            directory = self.original_directory(media_id)
+            shutil.rmtree(directory, ignore_errors=True)
+            shutil.rmtree(directory.with_name(directory.name + '.tmp'), ignore_errors=True)

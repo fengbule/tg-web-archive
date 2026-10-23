@@ -11,6 +11,59 @@ from app.media_tools import is_faststart, probe_media
 from app.transcoder import Transcoder
 
 
+@pytest.mark.skipif(not shutil.which('ffmpeg'), reason='ffmpeg is required')
+def test_original_segments_keep_encoded_av_and_timing(tmp_path):
+    """Exercise real AAC/H264 muxing, not just command construction."""
+    import hashlib
+    from app.media_tools import probe_streams
+    db, worker, source = make_optimizer(tmp_path)
+    try:
+        subprocess.run(['ffmpeg', '-nostdin', '-y', '-v', 'error',
+                        '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24',
+                        '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000',
+                        '-t', '9', '-c:v', 'libx264', '-g', '48', '-c:a', 'aac',
+                        '-movflags', '+faststart', str(source)], check=True)
+        before = hashlib.sha256(source.read_bytes()).hexdigest()
+        asyncio.run(worker._original(db.one('SELECT * FROM media'), source))
+        row = db.one('SELECT * FROM media')
+        assert row['original_hls_status'] == 'ready', row['original_hls_error']
+        manifest = worker.original_directory(1) / 'index.m3u8'
+        assert '#EXT-X-ENDLIST' in manifest.read_text()
+        assert len(list(manifest.parent.glob('segment-*.m4s'))) >= 2
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == before
+        original = probe_streams(source)
+        segmented = probe_streams(manifest)
+        assert [s['codec_name'] for s in segmented] == ['h264', 'aac']
+        def stream_hash(path, stream):
+            return subprocess.check_output(['ffmpeg', '-v', 'error', '-i', str(path),
+                '-map', '0:' + stream, '-c', 'copy', '-f', 'streamhash', '-hash', 'sha256', '-']).split(b'=')[-1].strip()
+        # Compressed video packets stay identical: no quality loss.
+        assert stream_hash(source, 'v:0') == stream_hash(manifest, 'v:0')
+        # The first AAC priming packet can differ between MP4 and HLS; validate
+        # the A/V relative origin and duration rather than ignoring that offset.
+        def offset(streams):
+            return float(streams[1]['start_time']) - float(streams[0]['start_time'])
+        assert abs(offset(original) - offset(segmented)) < .050
+        assert abs(probe_media(manifest)['duration'] - probe_media(source)['duration']) < .150
+        worker.delete_variants(source, 1)
+        assert source.is_file() and not manifest.parent.exists()
+    finally:
+        db.close()
+
+
+def test_original_low_disk_keeps_source_and_no_partial_cache(tmp_path, monkeypatch):
+    db, worker, source = make_optimizer(tmp_path)
+    monkeypatch.setattr('app.transcoder.probe_streams', lambda _: [{'codec_type': 'video', 'codec_name': 'h264'}])
+    monkeypatch.setattr('app.transcoder.shutil.disk_usage', lambda _: SimpleNamespace(free=0))
+    try:
+        asyncio.run(worker._original(db.one('SELECT * FROM media'), source))
+        assert db.one('SELECT original_hls_status FROM media')['original_hls_status'] == 'failed'
+        assert source.read_bytes() == b'original-video'
+        assert not worker.original_directory(1).exists()
+    finally:
+        db.close()
+
+
 def make_optimizer(tmp_path):
     db = Database(tmp_path / 'app.db')
     db.init()

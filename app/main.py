@@ -365,7 +365,7 @@ def delete_media_record(x):
     except Exception: pass
     removed=safe_unlink(x.get('file_path')); safe_unlink(x.get('thumb_path'))
     if x.get('smooth_path'): safe_unlink(x['smooth_path'])
-    try: transcoder.delete_variants(Path(x.get('file_path') or ''))
+    try: transcoder.delete_variants(Path(x.get('file_path') or ''), int(x['id']))
     except Exception: pass
     if x.get('download_id'): safe_unlink(str(ROOT/'temp'/f"{x['download_id']}.part"))
     db.execute('DELETE FROM media WHERE id=?',(x['id'],))
@@ -432,6 +432,28 @@ def media_detail(id:int): return media_row(id)[0]
 @app.get('/api/media/{id}/sendability')
 async def media_sendability(id:int):
     x,_=media_row(id); return await tg.media_sendability(int(x.get('account_id') or 1),x)
+
+@app.get('/api/media/{id}/playback')
+def playback(id:int):
+    x,_=media_row(id)
+    ready=x['original_hls_status']=='ready' and (transcoder.original_directory(id)/'index.m3u8').is_file()
+    return {'original':{'type':'hls' if ready else 'file',
+            'url':f'/api/media/{id}/hls/index.m3u8' if ready else f'/api/media/{id}/stream?quality=original'},
+            'status':x['original_hls_status']}
+
+@app.get('/api/media/{id}/hls/{name}')
+def original_hls(id:int,name:str):
+    x,_=media_row(id)
+    if x['original_hls_status']!='ready' or not re.fullmatch(r'(?:index\.m3u8|init\.mp4|segment-[0-9]{5,}\.m4s)',name):
+        raise HTTPException(404,'播放分片不存在')
+    p=(transcoder.original_directory(id)/name).resolve()
+    if MEDIA_ROOT not in p.parents or not p.is_file(): raise HTTPException(404,'播放分片不存在')
+    mime='application/vnd.apple.mpegurl' if name.endswith('.m3u8') else 'video/mp4'
+    headers={'Cache-Control':'private, max-age=3600'}
+    if os.getenv('USE_X_ACCEL','false').lower()=='true':
+        headers['X-Accel-Redirect']='/protected-media/'+quote(p.relative_to(MEDIA_ROOT).as_posix(),safe='/')
+        return Response(media_type=mime,headers=headers)
+    return FileResponse(p,media_type=mime,headers=headers)
 @app.get('/api/media/{id}/thumbnail')
 def thumbnail(id:int):
     x,_=media_row(id); p=Path(x['thumb_path']).resolve() if x['thumb_path'] else None

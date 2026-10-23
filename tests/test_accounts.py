@@ -133,6 +133,7 @@ def test_legacy_database_migration_retains_ids_foreign_keys_and_account_scoping(
     '''); legacy.commit(); legacy.close()
     db=Database(path); db.init()
     assert db.one('SELECT download_id FROM media WHERE id=9')['download_id']==7
+    assert db.one('SELECT original_hls_status FROM media WHERE id=9')['original_hls_status']=='pending'
     assert not db.all('PRAGMA foreign_key_check')
     other=db.execute("INSERT INTO downloads(account_id,channel_id,message_id,file_name,created_at,updated_at) VALUES(2,123,456,'other','t','t')").lastrowid
     assert other>20

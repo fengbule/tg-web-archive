@@ -33,6 +33,7 @@
     const busy = smoothBusy(x);
     const progress = Math.round(Number(x.smooth_progress) || 0);
     const flags = [];
+    flags.push('<span class="flag original">原画</span>');
     if (x.width && x.height) flags.push(`<span class="flag">${x.width}×${x.height}</span>`);
     if (ready) flags.push('<span class="flag quality">480P 流畅</span>');
     else if (busy) flags.push(`<span class="flag optimizing">优化 ${progress}%</span>`);
@@ -58,7 +59,7 @@
           <span>${x.size && x.duration ? ((x.size * 8 / x.duration / 1e6).toFixed(2) + ' Mbps') : duration(x.duration)}</span>
         </div>
         <div class="media-actions">
-          <button type="button" onclick="play(${x.id})">${icon('play')} 播放</button>
+          <button type="button" onclick="play(${x.id})">${icon('play')} 播放原画</button>
           <button type="button" class="icon-action" onclick="pDownload(${x.id})" title="下载原画">${icon('download')}</button>
           <button type="button" class="icon-action" onclick="pMediaMenu(${x.id})" title="更多操作">${icon('chevron')}</button>
         </div>
@@ -120,6 +121,7 @@
   window.library = function () {
     selectedMedia.clear();
     content.innerHTML = `
+      <div class="library-heading"><div><span class="eyebrow">YOUR COLLECTION</span><h3>你的媒体空间</h3><p>原画播放，随时继续。轻松保存到手机与电脑。</p></div><span class="library-count" id="libraryCount"></span></div>
       <div class="toolbar">
         <input id="mediaSearch" placeholder="搜索视频名称或频道" onkeydown="if(event.key==='Enter')loadMedia()">
         <select id="mediaSort" onchange="loadMedia()">
@@ -141,6 +143,7 @@
     const xs = await api(`/media?q=${q}&sort=${sort}`);
     const box = $('#mediaGrid');
     if (!box) return;
+    if ($('#libraryCount')) $('#libraryCount').textContent = `${xs.length} 个视频`;
     const ids = new Set(xs.map((x) => Number(x.id)));
     [...selectedMedia].forEach((id) => { if (!ids.has(id)) selectedMedia.delete(id); });
     box.innerHTML = xs.length
@@ -229,312 +232,234 @@
   }
 
   /* ---------------- player ---------------- */
-  let pResumeToast = false;
-
+  let playerRequest = 0;
   window.play = async function (id, preferred) {
+    const request = ++playerRequest;
     window.pClosePlayer?.();
-    const x = await api('/media/' + id);
+    const [x, playback] = await Promise.all([
+      api('/media/' + id),
+      api(`/media/${id}/playback`).catch(() => ({ original: { type: 'file', url: `/api/media/${id}/stream?quality=original` } })),
+    ]);
+    if (request !== playerRequest) return;
     let smooth = smoothReady(x);
-    // Prefer the small seekable rendition even when a browser reports "4g":
-    // that describes the local connection, not this server's overseas route.
-    let quality = smooth && preferred !== 'original' ? 'smooth' : 'original';
-    const src = `/api/media/${id}/stream?quality=${quality}`;
-    modal(`<div class="video-modal player-shell">
+    let quality = preferred === 'smooth' && smooth ? 'smooth' : 'original';
+    let hls = null, direct = false, sourceRun = 0, closed = false;
+    let restorePosition = 0, resumeOnReady = true, firstLoad = true;
+    let smoothTimer = null, saveAt = 0, speed = 1;
+    modal(`<div class="video-modal player-shell" id="playerShell">
       <div class="player-top">
-        <div class="player-title"><h3>${esc(x.file_name)}</h3><p>${esc(x.channel_title)} · ${x.width}×${x.height} · ${fmt(x.size)}</p></div>
-        <button class="quality-btn" id="qualityButton" type="button" ${smooth ? '' : 'disabled'} title="切换原画 / 流畅 480P">${quality === 'smooth' ? '480P 流畅' : '原画'}</button>
-        <button class="ctl" id="playerClose" type="button" aria-label="关闭">${icon('x')}</button>
+        <div class="player-title"><span class="player-eyebrow">NOW PLAYING</span><h3>${esc(x.file_name)}</h3><p>${esc(x.channel_title)} · ${x.width} × ${x.height} · ${fmt(x.size)}</p></div>
+        <button class="quality-btn" id="qualityButton" type="button" ${smooth ? '' : 'disabled'} title="切换原画 / 流畅版">${quality === 'smooth' ? '480P 流畅' : '原画'}</button>
+        <button class="ctl" id="playerClose" type="button" aria-label="关闭播放器">${icon('x')}</button>
       </div>
       <div class="player-stage" id="playerStage">
-        ${x.thumb_path ? `<div class="player-ambient" style="background-image:url('${thumbUrl(x)}')"></div>` : ''}
         <video id="player" playsinline webkit-playsinline preload="auto" poster="${x.thumb_path ? thumbUrl(x) : ''}"></video>
-        <div class="player-spinner show" id="playerSpinner"></div>
-        <button class="player-bigplay" id="bigPlay" type="button" aria-label="播放">${icon('play')}</button>
-        <div class="buffer-status" id="bufferStatus" hidden>正在缓冲…</div>
+        <div class="player-spinner" id="playerSpinner"></div>
+        <div class="stage-actions">
+          <button class="skip-button" id="skipBack" type="button" aria-label="后退 10 秒">${icon('refresh')}<span>10</span></button>
+          <button class="player-bigplay" id="bigPlay" type="button" aria-label="播放">${icon('play')}</button>
+          <button class="skip-button" id="skipForward" type="button" aria-label="前进 10 秒">${icon('refresh')}<span>10</span></button>
+        </div>
+        <div class="seek-preview" id="seekPreview" hidden><b></b><small>松手后继续 · 横滑可精细定位</small></div>
+        <div class="buffer-status" id="bufferStatus" hidden>正在准备原画…</div>
       </div>
       <div class="player-controls">
+        <div class="seek-times"><span id="elapsedTime">0:00</span><span id="gestureHint">拖动进度条 · 画面横滑快进</span><span>${duration(x.duration)}</span></div>
         <div class="seek-wrap" id="seekWrap">
           <div class="seek-track"><div class="seek-buffer" id="seekBuffer"></div><div class="seek-played" id="seekPlayed"></div></div>
           <div class="seek-thumb" id="seekThumb"></div>
-          <input class="seek-input" id="seekInput" type="range" min="0" max="1000" value="0" step="1" aria-label="播放进度">
+          <input class="seek-input" id="seekInput" type="range" min="0" max="10000" value="0" step="1" aria-label="播放进度" aria-valuetext="0:00">
         </div>
         <div class="controls-row">
-          <button class="ctl" id="playToggle" type="button" aria-label="播放/暂停">${icon('play')}</button>
-          <span class="time" id="timeLabel">0:00 / ${duration(x.duration)}</span>
-          <span class="ctl-spacer"></span>
+          <button class="ctl primary-play" id="playToggle" type="button" aria-label="播放/暂停">${icon('play')}</button>
+          <span class="time" id="timeLabel">0:00 / ${duration(x.duration)}</span><span class="ctl-spacer"></span>
           <div class="volume-wrap" id="volumeWrap"><input id="volumeInput" type="range" min="0" max="1" step="0.05" value="1" aria-label="音量"></div>
           <button class="ctl" id="muteToggle" type="button" aria-label="静音">${icon('volume')}</button>
-          <button class="ctl" id="speedButton" type="button" title="播放速度" style="width:auto;padding:0 8px;font-size:11px">1×</button>
+          <button class="ctl" id="speedButton" type="button" aria-label="播放速度">1×</button>
           <button class="ctl" id="pipButton" type="button" aria-label="画中画">${icon('pip')}</button>
-          <a class="ctl" id="downloadButton" href="/api/media/${id}/stream?download=true" title="下载原画" aria-label="下载">${icon('download')}</a>
+          <a class="ctl" id="downloadButton" href="/api/media/${id}/stream?download=true" download title="下载原画到本机" aria-label="下载到本机">${icon('download')}</a>
           <button class="ctl" id="fullscreenButton" type="button" aria-label="全屏">${icon('expand')}</button>
         </div>
       </div>
-      <div class="player-foot">
-        <div class="player-meta"><span>画质 <b id="metaQuality">${quality === 'smooth' ? '480P 流畅' : '原画 · 未转码'}</b></span><span>码率 <b id="metaBitrate">${(quality === 'smooth' ? x.smooth_size : x.size) && x.duration ? ((quality === 'smooth' ? x.smooth_size : x.size) * 8 / x.duration / 1e6).toFixed(2) + ' Mbps' : '未知'}</b></span><span>时长 <b>${duration(x.duration)}</b></span><span class="player-hint">空格 播放 · ← → 快进 · F 全屏</span></div>
-        <div class="player-actions"><button class="ghost" id="smoothButton" type="button">${smooth ? '播放 480P 流畅版' : '生成 480P 流畅版'}</button><a href="/api/media/${id}/stream?download=true">${icon('download')}<span>下载到本机</span></a></div>
-      </div>
-      <div class="player-error" id="playerError" hidden></div>
+      <div class="player-foot"><div class="player-meta"><span class="original-pill" id="metaQuality">${quality === 'smooth' ? '480P 流畅' : '原画 · 原始编码'}</span><span id="metaBitrate"></span><span>音画同步播放</span></div><div class="player-actions"><button class="ghost" id="smoothButton" type="button">${smooth ? '切换流畅版' : '生成流畅版'}</button><a href="/api/media/${id}/stream?download=true" download>${icon('download')} 下载原文件</a></div></div>
+      <div class="player-error" id="playerError" role="status" hidden></div>
     </div>`, true);
-    const video = $('#player');
-    const stage = $('#playerStage');
-    const spinner = $('#playerSpinner');
-    const bigPlay = $('#bigPlay');
-    const buffer = $('#bufferStatus');
-    const playToggle = $('#playToggle');
-    const seek = $('#seekInput');
-    const played = $('#seekPlayed');
-    const buffered = $('#seekBuffer');
-    const thumb = $('#seekThumb');
-    const timeLabel = $('#timeLabel');
-    const qualityButton = $('#qualityButton');
-    const smoothButton = $('#smoothButton');
-    const downloadButton = $('#downloadButton');
-    let saveAt = 0;
-    let stallTimer = null;
-    let smoothTimer = null;
-    let restorePosition = null;
-    let dragging = false;
-    let closed = false;
-
-    const setQualityLink = (q) => {
-      downloadButton.href = `/api/media/${id}/stream?download=true${q === 'smooth' ? '&quality=smooth' : ''}`;
-      downloadButton.title = q === 'smooth' ? '下载 480P 流畅版' : '下载原画';
-    };
-
-    const paint = () => {
+    const video = $('#player'), stage = $('#playerStage'), spinner = $('#playerSpinner');
+    const bigPlay = $('#bigPlay'), buffer = $('#bufferStatus'), playToggle = $('#playToggle');
+    const seek = $('#seekInput'), played = $('#seekPlayed'), buffered = $('#seekBuffer'), thumb = $('#seekThumb');
+    const qualityButton = $('#qualityButton'), smoothButton = $('#smoothButton'), downloadButton = $('#downloadButton');
+    let scrubber;
+    const preview = (at, active = false) => {
       const d = Number(video.duration) || Number(x.duration) || 0;
-      const current = Number(video.currentTime) || 0;
-      if (d > 0) {
-        const p = pct(current, d);
-        played.style.width = `${p}%`;
-        thumb.style.left = `${p}%`;
-        if (!dragging) seek.value = String(Math.round(p * 10));
-        timeLabel.textContent = `${duration(current)} / ${duration(d)}`;
-        let end = 0;
-        try {
-          for (let i = 0; i < video.buffered.length; i++) {
-            if (video.buffered.start(i) <= current + 0.5 && video.buffered.end(i) >= current) {
-              end = video.buffered.end(i);
-              break;
-            }
-            end = Math.max(end, video.buffered.end(i));
-          }
-        } catch {}
-        buffered.style.width = `${pct(end, d)}%`;
-      }
+      const percentage = pct(at, d);
+      played.style.width = `${percentage}%`; thumb.style.left = `${percentage}%`;
+      seek.value = String(Math.round(percentage * 100));
+      seek.setAttribute('aria-valuetext', `${duration(at)} / ${duration(d)}`);
+      $('#elapsedTime').textContent = duration(at);
+      $('#timeLabel').textContent = `${duration(at)} / ${duration(d)}`;
+      $('#seekWrap').classList.toggle('active', active);
+      $('#seekPreview').hidden = !active;
+      if (active) $('#seekPreview b').textContent = duration(at);
     };
-
-    const showSpinner = (on) => spinner.classList.toggle('show', on);
-    const hideBig = () => bigPlay.classList.add('hide');
-    const showBig = () => bigPlay.classList.remove('hide');
-
-    video.src = src;
-    setQualityLink(quality);
-    video.load();
-    video.play().catch(() => {});
-
-    let saved = 0;
-    try { saved = Number(localStorage.getItem('tvm-pos-' + id) || 0); } catch {}
-    video.addEventListener('loadedmetadata', () => {
-      video.playbackRate = speed;
-      const d = Number(video.duration) || 0;
-      const initial = restorePosition === null;
-      const at = initial ? saved : restorePosition;
-      restorePosition = null;
-      if (at > 0 && d > 0 && at < d - (initial ? 12 : 0)) {
-        video.currentTime = at;
-        if (initial && !pResumeToast) {
-          pResumeToast = true;
-          toast(`已从上次位置 ${duration(saved)} 继续播放`);
-          setTimeout(() => { pResumeToast = false; }, 4000);
-        }
+    const paint = () => {
+      if (closed || scrubber?.dragging()) return;
+      preview(Number(video.currentTime) || 0);
+      const d = Number(video.duration) || Number(x.duration) || 0;
+      let end = Number(video.currentTime) || 0;
+      for (let n = 0; n < video.buffered.length; n++) {
+        if (video.buffered.start(n) <= end + .5 && video.buffered.end(n) >= end) end = video.buffered.end(n);
       }
+      buffered.style.width = `${pct(end, d)}%`;
+    };
+    const showSpinner = on => spinner.classList.toggle('show', on);
+    const error = message => { $('#playerError').hidden = false; $('#playerError').textContent = message; };
+    const updateQuality = () => {
+      qualityButton.textContent = quality === 'smooth' ? '480P 流畅' : '原画';
+      $('#metaQuality').textContent = quality === 'smooth' ? '480P 流畅' : '原画 · 原始编码';
+      const size = quality === 'smooth' ? x.smooth_size : x.size;
+      $('#metaBitrate').textContent = size && x.duration ? (size * 8 / x.duration / 1e6).toFixed(2) + ' Mbps' : '';
+      downloadButton.href = `/api/media/${id}/stream?download=true${quality === 'smooth' ? '&quality=smooth' : ''}`;
+      downloadButton.title = quality === 'smooth' ? '下载流畅版到本机' : '下载原画到本机';
+    };
+    const mount = (at, resume) => {
+      const run = ++sourceRun;
+      restorePosition = at; resumeOnReady = resume;
+      hls?.destroy(); hls = null;
+      video.pause(); video.removeAttribute('src'); video.load();
+      showSpinner(true); buffer.hidden = false;
+      buffer.textContent = quality === 'original' ? '正在准备原画…' : '正在准备流畅版…';
+      const original = quality === 'original' && !direct && playback.original.type === 'hls';
+      const url = original ? playback.original.url : `/api/media/${id}/stream?quality=${quality}`;
+      if (original && !video.canPlayType('application/vnd.apple.mpegurl') && window.Hls?.isSupported()) {
+        hls = new Hls({ autoStartLoad: false, startPosition: at, enableWorker: true, progressive: true,
+          maxBufferLength: 24, maxMaxBufferLength: 48, maxBufferSize: 32 * 1024 * 1024, backBufferLength: 30 });
+        const instance = hls;
+        instance.on(Hls.Events.MEDIA_ATTACHED, () => { if (run === sourceRun) instance.loadSource(url); });
+        instance.on(Hls.Events.MANIFEST_PARSED, () => { if (run === sourceRun) instance.startLoad(at); });
+        instance.on(Hls.Events.ERROR, (_event, data) => {
+          if (run !== sourceRun || closed || !data.fatal) return;
+          direct = true;
+          mount(restorePosition ?? video.currentTime, restorePosition !== null ? resumeOnReady : !video.paused && !video.ended);
+        });
+        instance.attachMedia(video);
+      } else {
+        video.src = original && video.canPlayType('application/vnd.apple.mpegurl') ? url : `/api/media/${id}/stream?quality=${quality}`;
+        video.load();
+      }
+      updateQuality();
+    };
+    video.addEventListener('loadedmetadata', () => {
+      if (closed) return;
+      video.playbackRate = speed;
+      const at = restorePosition; restorePosition = null;
+      if (at !== null && at > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(at, video.duration - .05);
+      if (firstLoad && at > 5) toast(`已继续上次播放 · ${duration(at)}`);
+      firstLoad = false;
+      if (resumeOnReady) video.play().catch(() => {});
       paint();
     });
     video.addEventListener('timeupdate', () => {
       paint();
-      const now = Date.now();
-      if (now - saveAt > 4000 && video.currentTime > 5) {
-        saveAt = now;
-        try { localStorage.setItem('tvm-pos-' + id, String(Math.floor(video.currentTime))); } catch {}
+      if (!scrubber?.dragging() && Date.now() - saveAt > 4000 && video.currentTime > 5) {
+        saveAt = Date.now();
+        try { localStorage.setItem('tvm-pos-' + id, String(video.currentTime)); } catch {}
       }
     });
     video.addEventListener('progress', paint);
     video.addEventListener('waiting', () => {
-      showSpinner(true); buffer.hidden = false;
-      clearTimeout(stallTimer);
-      stallTimer = setTimeout(() => {
-        if (!closed && quality === 'original' && smooth && !video.paused && video.readyState < 3) {
-          pSetQuality('smooth');
-        }
-      }, 3000);
-    });
-    video.addEventListener('playing', () => { clearTimeout(stallTimer); showSpinner(false); buffer.hidden = true; hideBig(); playToggle.innerHTML = icon('pause'); });
-    video.addEventListener('canplay', () => { showSpinner(false); buffer.hidden = true; });
-    video.addEventListener('pause', () => { showBig(); playToggle.innerHTML = icon('play'); });
-    video.addEventListener('ended', () => { showBig(); playToggle.innerHTML = icon('play'); });
-    video.addEventListener('error', async () => {
       if (closed) return;
-      showSpinner(false);
-      if (quality === 'original' && smooth) {
-        toast('原画编码或网络异常，已切换流畅版');
-        pSetQuality('smooth');
-        return;
-      }
-      $('#playerError').hidden = false;
-      $('#playerError').textContent = '这个视频的编码可能不被当前浏览器支持。可以下载原文件后用本地播放器播放。';
+      showSpinner(true); buffer.hidden = false;
+      buffer.textContent = quality === 'original' ? '原画缓冲中 · 保持原始画质' : '正在缓冲…';
     });
-    video.addEventListener('volumechange', () => { $('#muteToggle').style.opacity = video.muted || video.volume === 0 ? '.5' : '1'; });
-
+    const ready = () => { if (!closed) { showSpinner(false); buffer.hidden = true; } };
+    video.addEventListener('canplay', ready);
+    video.addEventListener('playing', () => { ready(); stage.classList.add('is-playing'); bigPlay.innerHTML = icon('pause'); playToggle.innerHTML = icon('pause'); });
+    video.addEventListener('pause', () => { stage.classList.remove('is-playing'); bigPlay.innerHTML = icon('play'); playToggle.innerHTML = icon('play'); });
+    video.addEventListener('ended', () => { stage.classList.remove('is-playing'); playToggle.innerHTML = icon('play'); });
+    video.addEventListener('error', () => {
+      if (closed || !video.error) return;
+      if (quality === 'original' && hls && !direct) { direct = true; mount(restorePosition ?? video.currentTime, restorePosition !== null ? resumeOnReady : !video.paused); return; }
+      ready(); error('原画暂时无法播放。可重试、下载原文件，或手动切换流畅版；画质不会自动降低。');
+    });
     const toggle = () => { if (video.paused) video.play().catch(() => {}); else video.pause(); };
-    playToggle.onclick = toggle;
-    bigPlay.onclick = toggle;
-    video.addEventListener('click', toggle);
-
-    seek.addEventListener('pointerdown', () => { dragging = true; });
-    seek.addEventListener('pointerup', () => { dragging = false; });
-    seek.addEventListener('input', () => {
-      const d = Number(video.duration) || 0;
-      if (!d) return;
-      const value = Number(seek.value) / 1000 * d;
-      played.style.width = `${Number(seek.value) / 10}%`;
-      thumb.style.left = `${Number(seek.value) / 10}%`;
-      timeLabel.textContent = `${duration(value)} / ${duration(d)}`;
-    });
-    seek.addEventListener('change', () => {
-      const d = Number(video.duration) || 0;
-      if (d) { video.currentTime = Number(seek.value) / 1000 * d; video.play().catch(() => {}); }
+    playToggle.onclick = toggle; bigPlay.onclick = toggle; video.addEventListener('click', toggle);
+    const skip = seconds => { video.currentTime = Math.max(0, Math.min((video.duration || 0) - .05, video.currentTime + seconds)); paint(); };
+    $('#skipBack').onclick = () => skip(-10); $('#skipForward').onclick = () => skip(10);
+    scrubber = attachMediaScrubber({ video, input: seek, stage, preview,
+      finish: () => { $('#seekPreview').hidden = true; $('#seekWrap').classList.remove('active'); paint(); },
+      changed: at => { if (hls && hls.loadingEnabled === false) hls.startLoad(at); },
     });
     $('#muteToggle').onclick = () => { video.muted = !video.muted; };
-    $('#volumeInput').oninput = (e) => { video.volume = Number(e.target.value); video.muted = false; };
-    $('#volumeWrap').onclick = (e) => e.stopPropagation();
+    video.addEventListener('volumechange', () => { if (!closed) $('#muteToggle').classList.toggle('is-muted', video.muted || video.volume === 0); });
+    $('#volumeInput').oninput = event => { video.volume = Number(event.target.value); video.muted = false; };
     $('#muteToggle').onmouseenter = () => $('#volumeWrap').classList.add('open');
     $('#volumeWrap').onmouseleave = () => $('#volumeWrap').classList.remove('open');
-
-    let speed = 1;
-    const rates = [1, 1.25, 1.5, 2, 0.75];
-    $('#speedButton').onclick = () => {
-      speed = rates[(rates.indexOf(speed) + 1) % rates.length];
-      video.playbackRate = speed;
-      $('#speedButton').textContent = speed + '×';
-    };
+    const rates = [1, 1.25, 1.5, 2, .75];
+    $('#speedButton').onclick = () => { speed = rates[(rates.indexOf(speed) + 1) % rates.length]; video.playbackRate = speed; $('#speedButton').textContent = speed + '×'; };
     $('#pipButton').onclick = async () => {
-      try {
-        if (document.pictureInPictureElement) await document.exitPictureInPicture();
-        else await video.requestPictureInPicture();
-      } catch { toast('当前浏览器不支持画中画'); }
+      try { if (document.pictureInPictureElement) await document.exitPictureInPicture(); else await video.requestPictureInPicture(); }
+      catch { toast('当前浏览器不支持画中画'); }
     };
     $('#fullscreenButton').onclick = async () => {
-      try {
-        if (document.fullscreenElement) await document.exitFullscreen();
-        else await (stage.requestFullscreen ? stage.requestFullscreen() : video.webkitEnterFullscreen?.());
-      } catch { toast('当前浏览器不支持全屏'); }
+      try { if (document.fullscreenElement) await document.exitFullscreen(); else if ($('#playerShell').requestFullscreen) await $('#playerShell').requestFullscreen(); else video.webkitEnterFullscreen?.(); }
+      catch { toast('当前浏览器不支持全屏'); }
     };
-
-    const pSetQuality = async (next) => {
-      if (closed) return;
-      if (next === quality) return;
-      if (next === 'smooth' && !smooth) return;
-      restorePosition = restorePosition ?? (Number(video.currentTime) || 0);
-      const paused = video.paused;
-      quality = next;
-      video.src = `/api/media/${id}/stream?quality=${quality}`;
-      setQualityLink(quality);
-      video.playbackRate = speed;
-      showSpinner(true);
-      const restore = () => {
-        if (!paused) video.play().catch(() => {});
-      };
-      video.addEventListener('loadedmetadata', restore, { once: true });
-      video.load();
-      qualityButton.textContent = quality === 'smooth' ? '480P 流畅' : '原画';
-      const metaQuality = $('#metaQuality');
-      const metaBitrate = $('#metaBitrate');
-      if (metaQuality) metaQuality.textContent = quality === 'smooth' ? '480P 流畅' : '原画 · 未转码';
-      if (metaBitrate) {
-        const size = quality === 'smooth' ? Number(x.smooth_size) : Number(x.size);
-        metaBitrate.textContent = size && x.duration ? (size * 8 / x.duration / 1e6).toFixed(2) + ' Mbps' : '未知';
-      }
-      toast(quality === 'smooth' ? '已切换到 480P 流畅版' : '已切换到原画');
+    const setQuality = next => {
+      if (closed || next === quality || (next === 'smooth' && !smooth)) return;
+      const at = restorePosition ?? video.currentTime;
+      const resume = restorePosition !== null ? resumeOnReady : !video.paused;
+      quality = next; $('#playerError').hidden = true;
+      mount(at, resume);
+      toast(next === 'original' ? '已切回原画' : '已切换流畅版');
     };
-    window.pSetQuality = pSetQuality;
-
-    qualityButton.onclick = () => {
-      if (smooth || smoothReady(x)) pSetQuality(quality === 'smooth' ? 'original' : 'smooth');
-    };
+    window.pSetQuality = setQuality;
+    qualityButton.onclick = () => setQuality(quality === 'original' ? 'smooth' : 'original');
     smoothButton.onclick = async () => {
-      if (smooth || smoothReady(x)) { pSetQuality('smooth'); return; }
+      if (smooth) { setQuality('smooth'); return; }
       smoothButton.disabled = true;
-      smoothButton.textContent = '正在生成…';
       try {
         await api(`/media/${id}/smooth`, { method: 'POST' });
-        clearInterval(smoothTimer);
+        smoothButton.textContent = '生成中…';
         smoothTimer = setInterval(async () => {
           try {
             const state = await api(`/media/${id}/smooth`);
             if (closed) return;
-            smoothButton.textContent = state.ready ? '播放 480P 流畅版' : `生成中 ${Math.round(state.progress)}%`;
-            if (state.ready) {
-              clearInterval(smoothTimer);
-              smooth = true;
-              x.smooth_status = 'ready';
-              x.smooth_path = 'ready';
-              x.smooth_size = state.size;
-              smoothButton.disabled = false;
-              smoothButton.onclick = () => pSetQuality('smooth');
-              qualityButton.disabled = false;
-              toast('480P 流畅版已生成');
-            } else if (state.status === 'failed') {
-              clearInterval(smoothTimer);
-              smoothButton.disabled = false;
-              smoothButton.textContent = '重新生成 480P';
-              toast(state.error || '流畅版生成失败');
+            smoothButton.textContent = `生成中 ${Math.round(state.progress)}%`;
+            if (state.ready || state.status === 'failed') {
+              clearInterval(smoothTimer); smoothButton.disabled = false;
+              smoothButton.textContent = state.ready ? '切换流畅版' : '重新生成流畅版';
+              if (state.ready) { smooth = true; x.smooth_size = state.size; qualityButton.disabled = false; }
+              else toast(state.error || '生成失败，请重试');
             }
-          } catch { clearInterval(smoothTimer); smoothButton.disabled = false; }
+          } catch { clearInterval(smoothTimer); if (!closed) smoothButton.disabled = false; }
         }, 2000);
-      } catch (e) {
-        toast(e.message);
-        smoothButton.disabled = false;
-        smoothButton.textContent = '生成 480P 流畅版';
-      }
+      } catch (ex) { toast(ex.message); smoothButton.disabled = false; }
     };
-
-    const onBackdrop = (e) => { if (e.target.id === 'modal') close(); };
+    const backdrop = event => { if (event.target.id === 'modal') close(); };
     const close = () => {
       if (closed) return;
-      closed = true;
-      clearTimeout(stallTimer);
-      clearInterval(smoothTimer);
-      document.removeEventListener('keydown', keyHandler);
-      try { localStorage.setItem('tvm-pos-' + id, String(Math.floor(video.currentTime || 0))); } catch {}
-      video.pause(); video.removeAttribute('src'); video.load();
-      $('#modal').removeEventListener('click', onBackdrop);
-      closeModal();
+      closed = true; sourceRun++; clearInterval(smoothTimer); scrubber.destroy();
+      try { localStorage.setItem('tvm-pos-' + id, String(restorePosition ?? video.currentTime)); } catch {}
+      hls?.destroy(); hls = null; video.pause(); video.removeAttribute('src'); video.load();
+      document.removeEventListener('keydown', keyHandler); $('#modal').removeEventListener('click', backdrop);
       if (window.pClosePlayer === close) window.pClosePlayer = null;
+      if (window.pSetQuality === setQuality) window.pSetQuality = null;
+      closeModal();
     };
-    window.pClosePlayer = close;
-    $('#playerClose').onclick = close;
-    $('#modal').addEventListener('click', onBackdrop);
-
-    if (x.smooth_status === 'failed' && !smooth) {
-      $('#playerError').hidden = false;
-      $('#playerError').textContent = '流畅版生成失败：' + (x.smooth_error || '编码不受支持');
-    }
-
-    const keyHandler = (e) => {
-      if (!document.getElementById('player')) { document.removeEventListener('keydown', keyHandler); return; }
-      if (e.target.matches('input,textarea,select')) return;
-      if (e.code === 'Space') { e.preventDefault(); toggle(); }
-      else if (e.code === 'ArrowLeft') { e.preventDefault(); video.currentTime = Math.max(0, video.currentTime - 5); }
-      else if (e.code === 'ArrowRight') { e.preventDefault(); video.currentTime = Math.min(video.duration || 0, video.currentTime + 5); }
-      else if (e.code === 'ArrowUp') { e.preventDefault(); video.volume = Math.min(1, video.volume + 0.1); }
-      else if (e.code === 'ArrowDown') { e.preventDefault(); video.volume = Math.max(0, video.volume - 0.1); }
-      else if (e.key === 'f' || e.key === 'F') { $('#fullscreenButton').click(); }
-      else if (e.key === 'm' || e.key === 'M') { video.muted = !video.muted; }
-      else if (e.key === 'Escape') { close(); }
+    const keyHandler = event => {
+      if (closed || event.target.matches('input,textarea,select')) return;
+      if (event.code === 'Space') { event.preventDefault(); toggle(); }
+      else if (event.code === 'ArrowLeft') { event.preventDefault(); skip(-5); }
+      else if (event.code === 'ArrowRight') { event.preventDefault(); skip(5); }
+      else if (event.key.toLowerCase() === 'f') $('#fullscreenButton').click();
+      else if (event.key.toLowerCase() === 'm') video.muted = !video.muted;
+      else if (event.key === 'Escape') close();
     };
-    document.addEventListener('keydown', keyHandler);
+    window.pClosePlayer = close; $('#playerClose').onclick = close;
+    $('#modal').addEventListener('click', backdrop); document.addEventListener('keydown', keyHandler);
+    let saved = 0;
+    try { saved = Number(localStorage.getItem('tvm-pos-' + id) || 0); } catch {}
+    mount(saved > 5 && saved < Number(x.duration) - 10 ? saved : 0, true);
   };
 
   /* ---------------- downloads ---------------- */

@@ -115,6 +115,31 @@ def smooth_command(source: Path, destination: Path) -> list[str]:
     ]
 
 
+def original_hls_command(source: Path, destination: Path) -> list[str]:
+    """Remux original A/V into muxed fMP4 segments without re-encoding.
+
+    Both tracks keep the same timestamp origin. Never reset timestamps or
+    trim audio/video independently: the browser uses one media clock.
+    """
+    return [
+        'ffmpeg', '-nostdin', '-y', '-hide_banner', '-loglevel', 'error',
+        '-i', str(source), '-map', '0:v:0', '-map', '0:a:0?', '-c', 'copy',
+        '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'vod',
+        '-hls_segment_type', 'fmp4', '-hls_flags', 'independent_segments',
+        '-hls_fmp4_init_filename', 'init.mp4',
+        '-hls_segment_filename', str(destination / 'segment-%05d.m4s'),
+        '-progress', 'pipe:1', '-nostats', str(destination / 'index.m3u8'),
+    ]
+
+
+def probe_streams(path: Path) -> list[dict]:
+    proc = subprocess.run(
+        ['ffprobe', '-v', 'error', '-show_streams', '-of', 'json', str(path)],
+        capture_output=True, text=True, check=True, timeout=60,
+    )
+    return json.loads(proc.stdout).get('streams', [])
+
+
 def safe_variant_path(source: Path, suffix: str) -> Path:
     return source.with_name(source.stem + suffix)
 
