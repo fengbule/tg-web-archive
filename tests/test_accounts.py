@@ -104,6 +104,29 @@ def test_running_jobs_prevent_logout(manager):
     assert not client.calls
 
 
+def test_logout_closes_only_target_accounts_file_connections(manager):
+    aid=manager.create_account('备用')
+    class Pool:
+        def __init__(self):self.closed=False
+        async def close(self):self.closed=True
+    first,second=Client(),Client();one,two=Pool(),Pool()
+    first._archive_file_pool=one;second._archive_file_pool=two
+    manager.service(1).client=first;manager.service(aid).client=second
+    asyncio.run(manager.logout(account_id=aid))
+    assert two.closed and not one.closed
+    assert 'logout' in second.calls and not first.calls
+
+
+def test_disconnect_closes_download_pool_before_main_connection(manager):
+    client=Client();events=[]
+    class Pool:
+        async def close(self):events.append('pool')
+    async def disconnect():events.append('main')
+    client._archive_file_pool=Pool();client.disconnect=disconnect;manager.service().client=client
+    asyncio.run(manager.disconnect_all())
+    assert events==['pool','main']
+
+
 def test_remove_active_first_account_selects_existing_fallback(manager):
     aid=manager.create_account('备用')
     asyncio.run(manager.remove(1))

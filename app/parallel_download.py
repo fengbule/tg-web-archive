@@ -24,7 +24,26 @@ async def managed(iterator):
 
 async def iter_file(client, file, offset, total, parts=3):
     parts = max(1, min(4, int(parts)))
-    if parts == 1 or total - offset < 8 * 1024 * 1024:
+    if total and offset >= total:
+        return
+    parallel = parts > 1 and total - offset >= 8 * 1024 * 1024
+    # An unaligned offset makes Telethon fetch two blocks for every subsequent
+    # chunk. Finish only the leading block, then keep all following reads aligned.
+    if total - offset > PART_SIZE and offset % PART_SIZE:
+        skip = offset % PART_SIZE
+        start = offset - skip
+        async with managed(client.iter_download(file, offset=start, limit=1,
+                request_size=PART_SIZE, chunk_size=PART_SIZE, file_size=total)) as iterator:
+            try: chunk = await anext(iterator)
+            except StopAsyncIteration:
+                raise ConnectionError('Telegram 续传分片提前结束') from None
+            if len(chunk) != min(PART_SIZE, total - start):
+                raise ConnectionError('Telegram 续传分片长度不完整')
+        yield chunk[skip:]
+        offset += len(chunk) - skip
+        if offset >= total:
+            return
+    if not parallel:
         async with managed(client.iter_download(file, offset=offset, request_size=PART_SIZE,
                             chunk_size=PART_SIZE, file_size=total or None)) as iterator:
             async for chunk in iterator:

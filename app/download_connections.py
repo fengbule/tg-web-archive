@@ -1,0 +1,184 @@
+"""Bounded cross-DC file connections for the account's existing Telethon client.
+
+Telethon 1.x shares one exported sender per DC. More iterators on that sender
+cannot overcome a slow individual connection. This facade gives native download
+iterators a small reusable pool; the login Session is never cloned or exported.
+"""
+import asyncio
+import copy
+from dataclasses import dataclass
+from telethon import functions
+from telethon.client.downloads import DownloadMethods
+from telethon.network.mtprotosender import MTProtoSender
+from telethon.tl.alltlobjects import LAYER
+
+
+async def create_sender(client, dc_id):
+    dc = await client._get_dc(dc_id)
+    sender = MTProtoSender(None, loggers=client._log)
+    try:
+        async with asyncio.timeout(25):
+            await sender.connect(client._connection(dc.ip_address, dc.port, dc.id,
+                loggers=client._log, proxy=client._proxy, local_addr=client._local_addr))
+            auth = await client(functions.auth.ExportAuthorizationRequest(dc_id))
+            # Do not mutate the main client's init request while other requests
+            # are in flight. Every file connection has a fresh in-memory key.
+            init = copy.copy(client._init_request)
+            init.query = functions.auth.ImportAuthorizationRequest(id=auth.id, bytes=auth.bytes)
+            await sender.send(functions.InvokeWithLayerRequest(LAYER, init))
+        return sender
+    except BaseException:
+        await sender.disconnect()
+        raise
+
+
+@dataclass
+class Entry:
+    sender: object
+    dc_id: int
+    users: int = 0
+
+
+class DownloadConnections:
+    """At most N file sockets per account, shared across jobs and destination DCs."""
+    def __init__(self, client, limit=3, idle_seconds=30, factory=create_sender):
+        self.client = client
+        self.limit = max(1, min(4, int(limit)))
+        self.idle_seconds = idle_seconds
+        self.factory = factory
+        self.entries = []
+        self.condition = asyncio.Condition()
+        self.idle_task = None
+        self.closed = False
+
+    async def borrow(self, dc_id):
+        async with self.condition:
+            while True:
+                if self.closed:
+                    raise ConnectionError('文件连接池已关闭，请稍后续传')
+                matching = [entry for entry in self.entries if entry.dc_id == dc_id]
+                # Prefer allocating unused capacity to increase TCP throughput;
+                # once full, requests to the same DC share the least busy slot.
+                if len(self.entries) < self.limit:
+                    sender = await self.factory(self.client, dc_id)
+                    entry = Entry(sender, dc_id, 1)
+                    self.entries.append(entry)
+                    return sender
+                if matching:
+                    entry = min(matching, key=lambda entry: entry.users)
+                    entry.users += 1
+                    return entry.sender
+                idle = next((entry for entry in self.entries if not entry.users), None)
+                if idle:
+                    self.entries.remove(idle)
+                    await idle.sender.disconnect()
+                    continue
+                # A second job can target another DC while every pool slot is
+                # occupied. Let it use Telethon's shared sender, rather than
+                # wait for a potentially multi-hour file to finish.
+                return None
+
+    async def release(self, sender):
+        async with self.condition:
+            entry = next((entry for entry in self.entries if entry.sender is sender), None)
+            if entry:
+                entry.users = max(0, entry.users - 1)
+                self.condition.notify_all()
+                if not any(entry.users for entry in self.entries) and self.idle_task is None:
+                    self.idle_task = asyncio.create_task(self._expire_idle())
+
+    async def _expire_idle(self):
+        try:
+            await asyncio.sleep(self.idle_seconds)
+            async with self.condition:
+                idle = [entry for entry in self.entries if not entry.users]
+                self.entries = [entry for entry in self.entries if entry.users]
+                for entry in idle:
+                    await entry.sender.disconnect()
+                self.condition.notify_all()
+        finally:
+            self.idle_task = None
+
+    async def close(self):
+        async with self.condition:
+            self.closed = True
+            self.condition.notify_all()
+            task = self.idle_task
+            self.idle_task = None
+        if task:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        async with self.condition:
+            entries, self.entries = self.entries, []
+            for entry in entries:
+                await entry.sender.disconnect()
+
+
+class DownloadClient:
+    """Native Telethon iteration and error handling, with explicit sender ownership."""
+    def __init__(self, client, pool):
+        self.base = client
+        self.pool = pool
+        self.leases = []
+
+    def __getattr__(self, name):
+        return getattr(self.base, name)
+
+    async def __call__(self, *args, **kwargs):
+        return await self.base(*args, **kwargs)
+
+    def iter_download(self, file, **kwargs):
+        scope = DownloadClient(self.base, self.pool)
+        iterator = DownloadMethods._iter_download(scope, file, **kwargs)
+        # Native close() also needs to be safe if cancellation happens during
+        # _init(), before the exported sender has been assigned.
+        iterator._sender = None
+        return DownloadIterator(iterator, scope)
+
+    async def _borrow_exported_sender(self, dc_id):
+        # FileMigrateError replaces the sender inside a native iterator. Release
+        # its former lease before allocating the new DC to avoid orphaned slots.
+        await self.release_all()
+        sender = await self.pool.borrow(dc_id) if dc_id != self.base.session.dc_id else None
+        pooled = sender is not None
+        if not pooled:
+            sender = await self.base._borrow_exported_sender(dc_id)
+        self.leases.append((sender, pooled))
+        return sender
+
+    async def _return_exported_sender(self, sender):
+        index = next((i for i, pair in enumerate(self.leases) if pair[0] is sender), None)
+        if index is not None:
+            _, pooled = self.leases.pop(index)
+            if pooled:
+                await self.pool.release(sender)
+            else:
+                await self.base._return_exported_sender(sender)
+
+    async def release_all(self):
+        for sender, _ in list(self.leases):
+            await self._return_exported_sender(sender)
+
+
+class DownloadIterator:
+    def __init__(self, iterator, scope):
+        self.iterator = iterator
+        self.scope = scope
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        return await anext(self.iterator)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        await self.close()
+
+    async def close(self):
+        try:
+            await self.iterator.close()
+        finally:
+            await self.scope.release_all()

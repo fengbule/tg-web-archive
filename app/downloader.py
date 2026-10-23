@@ -3,6 +3,7 @@ from pathlib import Path
 from .db import now
 from contextlib import aclosing
 from .parallel_download import iter_file
+from .download_connections import DownloadConnections, DownloadClient
 
 log=logging.getLogger('tvm.downloader')
 class UserCancelled(Exception): pass
@@ -12,12 +13,16 @@ class Downloader:
         self.db=db; self.tg=tg; self.root=root; self.media=root/'media'; self.temp=root/'temp'; self.thumbs=root/'thumbnails'
         self.concurrency=concurrency; self.reserve=int(min_free_gb*1024**3); self.workers=[]; self.cancelled=set(); self.pause_requested=set(); self.stopping=False
         self.transcoder=None
-        self.parts=max(1,min(4,int(os.getenv('DOWNLOAD_PARTS','3'))))
+        self.parts=max(1,min(4,int(os.getenv('DOWNLOAD_PARTS','4'))))
+        self.connections=max(1,min(4,int(os.getenv('DOWNLOAD_CONNECTIONS','4'))))
+        self.pools={}
     async def start(self): self.workers=[asyncio.create_task(self.worker(i)) for i in range(self.concurrency)]
     async def stop(self):
         self.stopping=True
         for w in self.workers: w.cancel()
         await asyncio.gather(*self.workers,return_exceptions=True)
+        await asyncio.gather(*(pool.close() for pool in self.pools.values()),return_exceptions=True)
+        self.pools.clear()
     def enqueue(self,item):
         t=now(); safe=Path(item['file_name']).name.replace('\x00','')[:240] or f"video_{item['message_id']}.mp4"; account_id=int(item.get('account_id') or self.tg.active_id)
         try:
@@ -85,11 +90,18 @@ class Downloader:
                 speed=(cur-last_b)/max(t-last_t,.01); self.db.execute('UPDATE downloads SET downloaded_bytes=?,total_bytes=?,speed=?,updated_at=? WHERE id=?',(cur,total,speed,now(),job['id'])); last_t=t; last_b=cur
         self.db.execute('UPDATE downloads SET temp_path=?,downloaded_bytes=?,total_bytes=?,updated_at=? WHERE id=?',(str(temp),existing,total,now(),job['id']))
         try:
+            reader=c
+            if self.connections>1 and self.parts>1 and total-existing>=8*1024*1024 and hasattr(c,'_borrow_exported_sender'):
+                pool=self.pools.get(c)
+                if pool is None or pool.closed:
+                    pool=self.pools[c]=DownloadConnections(c,self.connections)
+                    c._archive_file_pool=pool
+                reader=DownloadClient(c,pool)
             with temp.open('ab' if existing else 'wb') as f:
                 current=existing
                 if job['id'] in self.cancelled: raise UserCancelled()
                 if job['id'] in self.pause_requested: raise DownloadPaused()
-                async with aclosing(iter_file(c,msg.video,existing,total,self.parts)) as chunks:
+                async with aclosing(iter_file(reader,msg.video,existing,total,self.parts)) as chunks:
                     async for chunk in chunks:
                         if job['id'] in self.cancelled: raise UserCancelled()
                         if job['id'] in self.pause_requested: raise DownloadPaused()

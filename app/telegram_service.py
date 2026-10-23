@@ -50,6 +50,7 @@ class TelegramAccountService:
     async def send_code(self,phone,api_id=None,api_hash=None):
         await self.qr_login.cancel()
         if api_id and api_hash:
+            await self._close_file_pool()
             if self.client: await self.client.disconnect(); self.client=None
             self.save_api(api_id,api_hash)
         c=await self.get_client(); sent=await c.send_code_request(phone); self.phone=phone; self.phone_code_hash=sent.phone_code_hash
@@ -76,6 +77,7 @@ class TelegramAccountService:
             try:
                 if self.client:
                     try:
+                        await self._close_file_pool()
                         if not self.client.is_connected(): await self.client.connect()
                         if await self.client.is_user_authorized():
                             if not await self.client.log_out():
@@ -95,7 +97,13 @@ class TelegramAccountService:
                 self.ending_session=False
     async def disconnect(self):
         await self.qr_login.cancel()
+        await self._close_file_pool()
         if self.client: await self.client.disconnect(); self.client=None
+    async def _close_file_pool(self):
+        pool=getattr(self.client,'_archive_file_pool',None) if self.client else None
+        if pool:
+            await pool.close()
+            self.client._archive_file_pool=None
     async def channels(self,query='',refresh=False):
         if self.channels_cache and not refresh and time.monotonic()-self.channels_cached_at<300:
             return [x for x in self.channels_cache if not query or query.lower() in x['title'].lower()]
