@@ -115,7 +115,7 @@ class Transcoder:
             try:
                 row = self.db.one(
                     "SELECT * FROM media "
-                    "WHERE faststart=0 OR smooth_status='queued' OR original_hls_status='pending' OR preview_status='pending' "
+                    "WHERE faststart=0 OR (smooth_status='queued' AND NOT EXISTS (SELECT 1 FROM downloads WHERE status IN ('queued','downloading','pausing','retrying'))) OR original_hls_status='pending' OR preview_status='pending' "
                     "ORDER BY CASE WHEN faststart=0 OR original_hls_status='pending' THEN 0 WHEN preview_status='pending' THEN 1 ELSE 2 END, id LIMIT 1"
                 )
                 if not row:
@@ -151,7 +151,7 @@ class Transcoder:
                 self.phase = 'preview'
                 await self._preview(row, Path(row['file_path']))
                 row = self.db.one('SELECT * FROM media WHERE id=?', (media_id,))
-            if row and row.get("smooth_status") == "queued":
+            if row and row.get("smooth_status") == "queued" and not self.db.one("SELECT 1 FROM downloads WHERE status IN ('queued','downloading','pausing','retrying') LIMIT 1"):
                 self.phase = 'smooth'
                 await self._smooth(row, Path(row["file_path"]))
         finally:

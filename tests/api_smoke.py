@@ -11,9 +11,12 @@ import base64
 os.environ['ADMIN_PASSWORD_HASH_B64']=base64.b64encode(bcrypt.hashpw(b'test-password-123',bcrypt.gensalt())).decode()
 
 from fastapi.testclient import TestClient
-from app.main import app,db,tg
+from app.main import app,db,tg,transcoder
 
 with TestClient(app) as c:
+    # Route tests below use deliberately non-video bytes. Real ffmpeg work is
+    # covered separately; do not race those fabricated files against a worker.
+    c.portal.call(transcoder.stop)
     assert c.get('/health').status_code==200
     assert c.get('/api/dashboard').status_code==401
     assert c.get('/api/media/1/playback').status_code==401
@@ -71,6 +74,12 @@ with TestClient(app) as c:
     assert c.post('/api/accounts',json={'label':'  '}).status_code==400
     added=c.post('/api/accounts',json={'label':'备用账号'}); assert added.status_code==200
     aid=added.json()['id']; assert len(c.get('/api/accounts').json())==2
+    queued=c.post('/api/downloads',json=[{'account_id':aid,'channel_id':99,'message_id':1,'file_name':'fixture.mp4','size':1}])
+    assert queued.status_code==200
+    queued_id=queued.json()[0]['id']
+    assert db.one('SELECT account_id FROM downloads WHERE id=?',(queued_id,))['account_id']==aid
+    assert c.post(f'/api/downloads/{queued_id}/cancel').status_code==200
+    assert c.post('/api/downloads',json=[{'account_id':999999,'channel_id':99,'message_id':2,'file_name':'fixture.mp4'}]).status_code==400
     assert c.patch(f'/api/accounts/{aid}',json={'label':'工作账号'}).status_code==200
     assert c.patch(f'/api/accounts/{aid}',json={'label':'  '}).status_code==400
     assert c.post('/api/accounts/999999/logout').status_code==404

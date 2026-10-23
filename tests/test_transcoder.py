@@ -11,6 +11,21 @@ from app.media_tools import is_faststart, probe_media
 from app.transcoder import Transcoder
 
 
+def test_smooth_waits_for_download_queue_but_original_still_prepares(tmp_path,monkeypatch):
+    db,worker,source=make_optimizer(tmp_path)
+    db.execute("UPDATE media SET faststart=1,original_hls_status='pending',smooth_status='queued',preview_status='ready'")
+    db.execute("INSERT INTO downloads(channel_id,message_id,file_name,status,created_at,updated_at) VALUES(9,9,'active.mp4','queued',?,?)",(now(),now()))
+    phases=[]
+    async def original(*args):phases.append('original');db.execute("UPDATE media SET original_hls_status='ready'")
+    async def smooth(*args):phases.append('smooth')
+    monkeypatch.setattr(worker,'_original',original);monkeypatch.setattr(worker,'_smooth',smooth)
+    try:
+        asyncio.run(worker.process(db.one('SELECT * FROM media')));assert phases==['original']
+        db.execute("UPDATE downloads SET status='completed'")
+        asyncio.run(worker.process(db.one('SELECT * FROM media')));assert phases==['original','smooth']
+    finally:db.close()
+
+
 @pytest.mark.skipif(not shutil.which('ffmpeg'), reason='ffmpeg is required')
 def test_storyboards_keep_source_and_match_manifest(tmp_path):
     import hashlib, json

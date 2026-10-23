@@ -1,11 +1,13 @@
 import asyncio, logging, time, uuid, os, re
 from pathlib import Path
+from collections import OrderedDict
 from telethon import TelegramClient
 from telethon import utils
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError, FloodWaitError, UnauthorizedError
 from telethon.tl.types import Channel, Chat, User
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
+from telethon.tl.types import InputMessagesFilterVideo
 from .db import now
 from .qr_login import QRLoginFlow
 
@@ -16,6 +18,7 @@ class TelegramAccountService:
         self.account_id=account_id; self.session_name=session_name; self.session_dir=session_dir; self.thumb_dir=thumb_dir
         self.db=db; self.cipher=cipher; self.client=None; self.phone=''; self.phone_code_hash=''; self.lock=asyncio.Lock(); self.channels_cache=[]; self.channels_cached_at=0; self.me_cache=None
         self.qr_login=QRLoginFlow(); self.ending_session=False
+        self.video_messages=OrderedDict(); self.thumbnail_gate=asyncio.Semaphore(3); self.thumbnail_locks={}
     def _key(self,key): return key if self.account_id==1 else f'account:{self.account_id}:{key}'
     def _cfg(self,key):
         r=self.db.one('SELECT value FROM config WHERE key=?',(self._key(key),)); return r['value'] if r else None
@@ -103,29 +106,57 @@ class TelegramAccountService:
         return [x for x in out if not query or query.lower() in x['title'].lower()]
     async def videos(self,channel_id,offset_id=0,limit=30):
         c=await self.get_client(); entity=await c.get_entity(int(channel_id)); out=[]; last=0
-        async for m in c.iter_messages(entity,limit=min(limit,50),offset_id=offset_id):
+        limit=min(max(int(limit),1),50)
+        async for m in c.iter_messages(entity,limit=limit,offset_id=offset_id,filter=InputMessagesFilterVideo):
             last=m.id
             if not m.video: continue
+            self.video_messages[(int(channel_id),m.id)]=m
+            while len(self.video_messages)>150: self.video_messages.popitem(last=False)
             doc=m.video; attrs={type(a).__name__:a for a in doc.attributes}; va=attrs.get('DocumentAttributeVideo'); fa=attrs.get('DocumentAttributeFilename')
             name=getattr(fa,'file_name',None) or f'video_{m.id}.mp4'
             out.append({'message_id':m.id,'channel_id':int(channel_id),'channel_title':getattr(entity,'title',''),'file_name':name,
               'caption':m.message or '','date':m.date.isoformat(),'size':doc.size or 0,'duration':getattr(va,'duration',0) or 0,
               'width':getattr(va,'w',0) or 0,'height':getattr(va,'h',0) or 0,'has_thumbnail':bool(getattr(doc,'thumbs',None))})
-        existing={x['message_id'] for x in self.db.all('SELECT message_id FROM media WHERE account_id=? AND channel_id=?',(self.account_id,int(channel_id)))}
-        for x in out: x['downloaded']=x['message_id'] in existing
-        return {'items':out,'next_offset_id':last or None}
+        ids=[x['message_id'] for x in out]
+        existing={};jobs={}
+        if ids:
+            marks=','.join('?' for _ in ids);args=(self.account_id,int(channel_id),*ids)
+            existing={x['message_id']:x for x in self.db.all(f'SELECT id,message_id,file_path,thumb_path FROM media WHERE account_id=? AND channel_id=? AND message_id IN ({marks})',args)}
+            jobs={x['message_id']:x for x in self.db.all(f'SELECT id,message_id,status,downloaded_bytes,total_bytes FROM downloads WHERE account_id=? AND channel_id=? AND message_id IN ({marks})',args)}
+        for x in out:
+            local=existing.get(x['message_id']);job=jobs.get(x['message_id'])
+            x['downloaded']=bool(local and Path(local['file_path']).is_file())
+            x['local_media_id']=local['id'] if x['downloaded'] else None
+            x['local_thumbnail']=bool(x['downloaded'] and local['thumb_path'] and Path(local['thumb_path']).is_file())
+            x['download_status']='completed' if x['downloaded'] else (job['status'] if job else None)
+            x['download_id']=job['id'] if job else None
+            x['download_progress']=min(100,round(job['downloaded_bytes']/job['total_bytes']*100,1)) if job and job['total_bytes'] else 0
+        return {'items':out,'next_offset_id':last if len(out)==limit else None,'account_id':self.account_id}
     async def thumbnail(self,channel_id,message_id):
+        local=self.db.one('SELECT thumb_path FROM media WHERE account_id=? AND channel_id=? AND message_id=?',(self.account_id,int(channel_id),int(message_id)))
+        if local and local['thumb_path'] and Path(local['thumb_path']).is_file(): return Path(local['thumb_path'])
         target=self.thumb_dir/str(self.account_id)/str(channel_id)/f'{message_id}.jpg'
         if target.is_file() and target.stat().st_size: return target
-        target.parent.mkdir(parents=True,exist_ok=True); temp=target.with_suffix('.part')
-        c=await self.get_client(); entity=await c.get_entity(int(channel_id)); msg=await c.get_messages(entity,ids=int(message_id))
-        if not msg or not msg.video or not getattr(msg.video,'thumbs',None): return None
+        key=(int(channel_id),int(message_id)); entry=self.thumbnail_locks.setdefault(key,[asyncio.Lock(),0])
+        entry[1]+=1
         try:
-            result=await c.download_media(msg.video,file=str(temp),thumb=-1)
-            p=Path(result) if result else temp
-            if p.is_file() and p.stat().st_size:
-                os.replace(p,target); return target
-        finally: temp.unlink(missing_ok=True)
+            async with entry[0], self.thumbnail_gate:
+                if target.is_file() and target.stat().st_size: return target
+                async with asyncio.timeout(20):
+                    c=await self.get_client(); msg=self.video_messages.get(key)
+                    if msg is None:
+                        entity=await c.get_entity(int(channel_id)); msg=await c.get_messages(entity,ids=int(message_id))
+                    if not msg or not msg.video or not getattr(msg.video,'thumbs',None): return None
+                    target.parent.mkdir(parents=True,exist_ok=True); temp=target.with_suffix('.part')
+                    try:
+                        result=await c.download_media(msg.video,file=str(temp),thumb=-1)
+                        p=Path(result) if result else temp
+                        if p.is_file() and p.stat().st_size:
+                            os.replace(p,target); return target
+                    finally: temp.unlink(missing_ok=True)
+        finally:
+            entry[1]-=1
+            if not entry[1]: self.thumbnail_locks.pop(key,None)
         return None
     async def _entity(self,peer_id):
         c=await self.get_client()

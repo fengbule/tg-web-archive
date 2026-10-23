@@ -11,17 +11,24 @@ import bcrypt
 import uvicorn
 from cryptography.fernet import Fernet
 from telethon.errors import SessionPasswordNeededError
+from telethon.tl.types import Channel,ChatPhotoEmpty,DocumentAttributeVideo,DocumentAttributeFilename
 
 os.environ['DATA_ROOT']=tempfile.mkdtemp(prefix='tvm-accounts-ui-')
 os.environ['SESSION_SECRET']='disposable-browser-fixture-'*4
 os.environ['CONFIG_ENCRYPTION_KEY']=Fernet.generate_key().decode()
 os.environ['ADMIN_PASSWORD_HASH_B64']=base64.b64encode(bcrypt.hashpw(b'fixture-admin-password',bcrypt.gensalt())).decode()
 os.environ['COOKIE_SECURE']='false'
+os.environ['MIN_FREE_GB']='0'
 os.environ.pop('TELEGRAM_CLIENT_CONFIG',None)
 
 import app.telegram_service as telegram
 
-states={}; failures=set()
+states={}; failures=set(); cover_failures=set()
+
+def video_message(mid):
+    return SimpleNamespace(id=mid,message='隔离测试素材 · 横竖屏均可挑选',date=datetime.now(timezone.utc),video=SimpleNamespace(
+        id=mid,attributes=[DocumentAttributeVideo(duration=24,w=640,h=360),DocumentAttributeFilename(file_name=f'灵感片段 {mid:02d} · 原画.mp4')],
+        size=media.stat().st_size,thumbs=[] if mid==56 else [object()]))
 
 class FakeQR:
     expires=datetime.now(timezone.utc)+timedelta(seconds=30)
@@ -52,7 +59,20 @@ class FakeClient:
         states[str(self.path)]=False
         return True
     async def iter_dialogs(self,*args,**kwargs):
-        for item in []: yield item
+        entity=Channel(id=1,title='创作收藏 · Studio',photo=ChatPhotoEmpty(),date=datetime.now(timezone.utc))
+        yield SimpleNamespace(entity=entity,name=entity.title)
+    async def get_entity(self,*args): return SimpleNamespace(title='创作收藏 · Studio')
+    async def get_messages(self,entity,ids): return video_message(ids)
+    async def iter_messages(self,entity,limit=24,offset_id=0,**kwargs):
+        for mid in list(range(min(offset_id-1,60) if offset_id else 60,0,-1))[:limit]: yield video_message(mid)
+    async def download_media(self,doc,file,thumb=None):
+        if doc.id==57 and doc.id not in cover_failures:
+            cover_failures.add(doc.id);raise ConnectionError('Fixture cover temporarily unavailable')
+        Path(file).write_bytes(cover.read_bytes());return file
+    async def iter_download(self,doc,offset=0,chunk_size=512*1024,**kwargs):
+        data=media.read_bytes()
+        for start in range(offset,len(data),chunk_size):
+            await asyncio.sleep(.3);yield data[start:start+chunk_size]
 
 telegram.TelegramClient=FakeClient
 from app.main import app,tg
@@ -73,8 +93,14 @@ subprocess.run(['ffmpeg','-nostdin','-y','-v','error','-f','lavfi','-i',
     '-t','24','-c:v','libx264','-preset','ultrafast','-crf','32','-g','48',
     '-c:a','aac','-movflags','+faststart',str(media)],check=True)
 db.execute("INSERT INTO media(channel_id,message_id,channel_title,file_name,file_path,size,duration,width,height,downloaded_at,faststart,smooth_status) "
-    "VALUES(1,1,'创作收藏 · Studio','海岸线的二十四秒 · 原画测试.mp4',?,?,24,640,360,?,1,'queued')",
+    "VALUES(1,60,'创作收藏 · Studio','海岸线的二十四秒 · 原画测试.mp4',?,?,24,640,360,?,1,'queued')",
     (str(media),media.stat().st_size,now()))
+cover=ROOT/'thumbnails'/'fixture.jpg'
+subprocess.run(['ffmpeg','-nostdin','-y','-v','error','-ss','4','-i',str(media),'-frames:v','1','-vf','scale=480:-2',str(cover)],check=True)
+db.execute('UPDATE media SET thumb_path=? WHERE id=1',(str(cover),))
+for mid,status in [(59,'paused'),(55,'failed')]:
+    db.execute('INSERT INTO downloads(channel_id,message_id,channel_title,file_name,total_bytes,status,created_at,updated_at) VALUES(1,?,?,?,?,?,?,?)',
+        (mid,'创作收藏 · Studio',f'灵感片段 {mid:02d} · 原画.mp4',media.stat().st_size,status,now(),now()))
 
 @app.get('/__test__/slow-hls/{name}')
 def slow_hls(name:str):

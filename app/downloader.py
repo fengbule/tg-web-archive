@@ -1,6 +1,8 @@
 import asyncio, json, logging, mimetypes, os, shutil, subprocess, time
 from pathlib import Path
 from .db import now
+from contextlib import aclosing
+from .parallel_download import iter_file
 
 log=logging.getLogger('tvm.downloader')
 class UserCancelled(Exception): pass
@@ -10,6 +12,7 @@ class Downloader:
         self.db=db; self.tg=tg; self.root=root; self.media=root/'media'; self.temp=root/'temp'; self.thumbs=root/'thumbnails'
         self.concurrency=concurrency; self.reserve=int(min_free_gb*1024**3); self.workers=[]; self.cancelled=set(); self.pause_requested=set(); self.stopping=False
         self.transcoder=None
+        self.parts=max(1,min(4,int(os.getenv('DOWNLOAD_PARTS','3'))))
     async def start(self): self.workers=[asyncio.create_task(self.worker(i)) for i in range(self.concurrency)]
     async def stop(self):
         self.stopping=True
@@ -86,10 +89,11 @@ class Downloader:
                 current=existing
                 if job['id'] in self.cancelled: raise UserCancelled()
                 if job['id'] in self.pause_requested: raise DownloadPaused()
-                async for chunk in c.iter_download(msg.video,offset=existing,request_size=512*1024,chunk_size=512*1024,file_size=total or None):
-                    if job['id'] in self.cancelled: raise UserCancelled()
-                    if job['id'] in self.pause_requested: raise DownloadPaused()
-                    f.write(chunk); current+=len(chunk); await progress(current,total)
+                async with aclosing(iter_file(c,msg.video,existing,total,self.parts)) as chunks:
+                    async for chunk in chunks:
+                        if job['id'] in self.cancelled: raise UserCancelled()
+                        if job['id'] in self.pause_requested: raise DownloadPaused()
+                        f.write(chunk); current+=len(chunk); await progress(current,total)
                 if job['id'] in self.cancelled: raise UserCancelled()
                 if job['id'] in self.pause_requested: raise DownloadPaused()
                 f.flush(); os.fsync(f.fileno())

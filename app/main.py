@@ -78,6 +78,8 @@ async def security(request:Request,call_next):
         log.exception('请求处理失败 path=%s',request.url.path); return JSONResponse({'detail':'操作失败，请稍后重试'},status_code=500)
     if request.url.path.startswith('/api/media/') and request.url.path.endswith('/stream') and response.status_code in (200,206):
         response.headers['Cache-Control']='private, max-age=3600'
+    elif request.url.path.startswith('/api/') and request.url.path.endswith('/thumbnail') and response.status_code==200:
+        response.headers['Cache-Control']='private, max-age=3600'
     else: response.headers['Cache-Control']='no-store' if request.url.path.startswith('/api/') else 'no-cache'
     return response
 
@@ -261,8 +263,10 @@ async def channels(q:str='',refresh:bool=False): return await tg.channels(q,refr
 @app.get('/api/channels/{channel_id}/videos')
 async def videos(channel_id:int,offset_id:int=0,limit:int=30): return await tg.videos(channel_id,offset_id,limit)
 @app.get('/api/channels/{channel_id}/videos/{message_id}/thumbnail')
-async def telegram_thumbnail(channel_id:int,message_id:int):
-    p=await tg.thumbnail(channel_id,message_id)
+async def telegram_thumbnail(channel_id:int,message_id:int,account_id:int|None=None):
+    service=qr_service(account_id if account_id is not None else tg.active_id)
+    try: p=await service.thumbnail(channel_id,message_id)
+    except TimeoutError: raise HTTPException(504,'封面读取超时，请点击重试') from None
     if not p: raise HTTPException(404,'该视频没有可用封面')
     return FileResponse(p,media_type='image/jpeg',headers={'Cache-Control':'private, max-age=86400'})
 
@@ -310,13 +314,15 @@ async def join_target(b:JoinTarget):
     except Exception: raise HTTPException(400,'加入失败，请检查链接、账号权限或是否需要管理员审批')
 
 class QueueItem(BaseModel):
-    channel_id:int; message_id:int; channel_title:str=''; file_name:str; size:int=0
+    channel_id:int; message_id:int; channel_title:str=''; file_name:str; size:int=0; account_id:int|None=None
 @app.post('/api/downloads')
 def queue(items:list[QueueItem]):
     if not items or len(items)>100: raise HTTPException(400,'请选择 1 到 100 个视频')
+    for x in items:
+        if x.account_id is not None and not db.one('SELECT id FROM accounts WHERE id=?',(x.account_id,)): raise HTTPException(400,'Telegram 账号不存在')
     result=[]
     for x in items:
-        item=x.model_dump(); item['account_id']=tg.active_id
+        item=x.model_dump(); item['account_id']=x.account_id if x.account_id is not None else tg.active_id
         i,duplicate=downloader.enqueue(item); result.append({'id':i,'duplicate':duplicate})
     return result
 @app.get('/api/downloads')
