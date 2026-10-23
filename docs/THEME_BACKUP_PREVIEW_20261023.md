@@ -49,8 +49,29 @@ curl -fsS http://127.0.0.1:8081/health
 
 ```bash
 cd /opt/telegram-video-manager
-# 更新前先停止自己的 app，备份 .env、SQLite 与 Session/config，再启动 app。
-# 沿用 /root/backups/tg-web-archive-latest-private 指向的本次私有备份。
+umask 077
+backup_dir=/root/backups/tg-web-archive-$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -m 700 -p "$backup_dir"
+cp -p .env "$backup_dir/.env"
+git rev-parse HEAD > "$backup_dir/commit"
+docker inspect -f '{{.Image}}' telegram-video-manager > "$backup_dir/image"
+docker compose stop app
+trap 'docker compose start app >/dev/null' EXIT
+python3 - "$backup_dir" <<'PY'
+import sqlite3,tarfile,sys
+from pathlib import Path
+root=Path('/data/telegram-video-manager');backup=Path(sys.argv[1])
+source=sqlite3.connect(root/'database/app.db');dest=sqlite3.connect(backup/'app.db')
+source.backup(dest);dest.close();source.close()
+with tarfile.open(backup/'private-data.tar.gz','w:gz') as tar:
+    for name in ('session','config','database','thumbnails'):
+        tar.add(root/name,arcname=name)
+PY
+chmod 600 "$backup_dir"/*
+docker compose start app
+trap - EXIT
+printf '%s\n' "$backup_dir" > /root/backups/tg-web-archive-latest-private
+# 以上备份含登录授权和配置；视频及未完成 .part 仍在原数据目录。
 git fetch origin && git merge --ff-only origin/main
 docker compose build app
 docker compose up -d --no-deps --force-recreate app
@@ -59,10 +80,39 @@ docker compose restart nginx
 curl -fsS http://127.0.0.1:8080/health
 ```
 
-VPS 数据仍为 `/data/telegram-video-manager`。回滚到备份 `commit` 对应版本重新构建；也可将备份 `image` 对应镜像标记为 Compose app 镜像后 `up --no-build`。保留当前 .env 和数据，预览新增列不会影响旧版本；不要重跑 install、改密码或删除卷。详细命令见 [VPS 部署说明](VPS-618HK.md)。
+VPS 数据仍为 `/data/telegram-video-manager`。本次升级前为 `3ba4328`，可在工作树干净时按备份 `commit` 回滚代码，保留当前 .env 和数据（包括升级后的新下载）：
+
+```bash
+cd /opt/telegram-video-manager
+backup_dir=$(cat /root/backups/tg-web-archive-latest-private)
+git status --short  # 有修改时先处理，不执行 reset/clean
+git switch --detach "$(cat "$backup_dir/commit")"
+docker compose build app
+docker compose up -d --no-deps --force-recreate app
+docker compose up -d --wait app
+docker compose restart nginx
+curl -fsS http://127.0.0.1:8080/health
+```
+
+预览新增列与本次升级前版本兼容；不要重跑 install、改密码或删除卷。仅当明确需要恢复损坏的数据时，停止自己的 app 后先另外备份当前数据，再恢复配套 .env/数据库/Session；恢复旧数据会丢失备份之后的任务和授权。历史 [VPS 部署说明](VPS-618HK.md) 的默认流畅版描述已被后续默认原画版本取代。
 
 ## 验证记录
 
 发布前隔离环境：71 项 Python 测试、API 冒烟、依赖漏洞检查通过。无头 Chromium 覆盖：明暗主题首次跟随/切换/刷新记忆，1440/390/320 三尺寸的媒体库/账号/设置布局；加密文件下载、错误管理员密码/备份密码、重复导入；真实 JPEG 预览、触屏横滑/进度条、松手保留最后目标、暂停/恢复、原画渐进加载与音画同步回归。
 
-公网部署、真实长视频跳转测量与数据保留结果在实际验证后补充。切片预览与原画解码耗时分开测量；原画跳转仍受公网带宽、浏览器缓冲和源文件关键帧间隔限制。
+应用版本 `516600701b99d08b346d81b1266c99723444854b` 已部署两台服务器，镜像代码校验一致；公网健康、登录保护、明暗主题记忆、三尺寸布局、真实 JPEG 切片、原画播放、原画/流畅版 Range 206/416、本机完整附件下载与 ZIP 解压均通过，浏览器脚本错误为 0。
+
+| 测量 | VPS 55 分钟真实视频 | InstaBox 20 秒测试视频 |
+| --- | --- | --- |
+| 原画跳转并呈现目标帧 | 30:00，6.14 秒 | 12 秒，1.20 秒 |
+| 手机拖动显示切片 | 40:00，冷加载 1.08 秒 | 已预载切片，0.03 秒 |
+
+同位置单次对比（10/30/45 分钟）：升级前 6.64/6.39/5.58 秒，升级后 5.58/7.12/6.26 秒。**没有证据证明原画解码跳转显著缩短，不宣称原画秒切**；收益为切片反馈、同张切片内移动无需请求新图片，以及连续移动时不加载已放弃的目标。原画仍受带宽、并发任务和源文件关键帧间隔限制；这些值不是手机所有网络的保证。
+
+VPS 实际生成 414 格、7 张 JPEG，合计 917,838 字节。重启后原画与预览仍就绪，账号仍授权。55 分钟源文件 1,668,231,365 字节，原画分片 664 个；H264 压缩视频切片哈希一致，AAC/H264 同轨，相对音画起点仅差约 15 微秒。
+
+两台升级前后管理员/查看密码哈希、API 密文、Telegram auth key 指纹均一致；原有媒体逐项保留、数据库 quick_check=ok。InstaBox 仍为 1 账号、0 媒体。VPS 验收期间用户新增下载，快照为 1 账号、3 媒体、30 下载、1 发送，原有 1 条媒体仍完整保留；没有用旧数据库覆盖新增内容。Akile 容器 ID/配置哈希/3000 健康、Komari PID（8269/637）、1Panel 启动时间保持一致，保活配置未改。
+
+本次服务器私有备份：InstaBox `backups/tg-web-archive-20261023T030545Z.tar.gz`；VPS `/root/backups/tg-web-archive-20261023T030549Z-seek-upgrade/`。另外实际测试了 InstaBox 正确管理员密码导出，其加密文件与恢复密码分别保存在本机受保护目录，未导入生产账号、未撤销任何真实会话。
+
+待观察：VPS 仍在运行新的下载队列，原画与预览缓存会按单 worker 排队生成；空间不足或特殊编码失败时保留原文件播放和时间预览。原画长距离跳转的链路限制仍存在，切片并不代表对应原画已缓冲。
