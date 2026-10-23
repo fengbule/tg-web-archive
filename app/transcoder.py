@@ -39,6 +39,10 @@ from .media_tools import (
 log = logging.getLogger("tvm.transcoder")
 
 
+class SmoothDeferred(Exception):
+    """Release the optional encoder when a download becomes runnable."""
+
+
 class Transcoder:
     def __init__(self, db, root: Path, auto_smooth: bool = False):
         self.db = db
@@ -179,6 +183,13 @@ class Transcoder:
                 if progress: progress(line.decode('utf-8', 'replace').strip())
 
         readers = [asyncio.create_task(drain_error()), asyncio.create_task(drain_progress())]
+        if self.phase == 'smooth':
+            async def yield_to_downloads():
+                while proc.returncode is None:
+                    if self.db.one("SELECT 1 FROM downloads WHERE status IN ('queued','downloading','pausing','retrying') LIMIT 1"):
+                        raise SmoothDeferred()
+                    await asyncio.sleep(.5)
+            readers.append(asyncio.create_task(yield_to_downloads()))
         try:
             async with asyncio.timeout(timeout):
                 await asyncio.gather(*readers)
@@ -285,6 +296,14 @@ class Transcoder:
                 (str(destination), size, media_id),
             )
             log.info("流畅版完成 id=%s size=%s", media_id, size)
+        except SmoothDeferred:
+            if media_id not in self.cancelled:
+                self.db.execute(
+                    "UPDATE media SET smooth_status='queued',smooth_progress=0,"
+                    "smooth_error='优先下载，空闲后重新生成流畅版' WHERE id=? AND smooth_status='processing'",
+                    (media_id,),
+                )
+                log.info('流畅版退回队列，优先下载 id=%s', media_id)
         except Exception as exc:
             if media_id in self.cancelled: return
             log.warning("流畅版失败 id=%s %s", media_id, exc)

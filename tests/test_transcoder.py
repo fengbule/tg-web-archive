@@ -26,6 +26,39 @@ def test_smooth_waits_for_download_queue_but_original_still_prepares(tmp_path,mo
     finally:db.close()
 
 
+@pytest.mark.parametrize('cancel', [False, True])
+def test_running_smooth_yields_to_new_download_and_preserves_user_cancel(tmp_path,monkeypatch,cancel):
+    db,worker,source=make_optimizer(tmp_path)
+    db.execute("UPDATE media SET faststart=1,original_hls_status='ready',preview_status='ready',smooth_status='queued',duration=60")
+    monkeypatch.setattr('app.transcoder.smooth_command',lambda src,dst:
+        [sys.executable,'-c',"import pathlib,sys,time;pathlib.Path(sys.argv[1]).write_bytes(b'partial');time.sleep(60)",str(dst)])
+    async def check():
+        task=asyncio.create_task(worker.process(db.one('SELECT * FROM media')))
+        try:
+            async def started():
+                while worker.proc is None:await asyncio.sleep(.001)
+            await asyncio.wait_for(started(),3);child=worker.proc
+            db.execute("INSERT INTO downloads(channel_id,message_id,file_name,status,created_at,updated_at) VALUES(9,9,'new.mp4','queued',?,?)",(now(),now()))
+            if cancel:worker.cancel_smooth(1)
+            await asyncio.wait_for(task,4)
+            row=db.one('SELECT * FROM media')
+            assert row['smooth_status']==('idle' if cancel else 'queued')
+            assert row['smooth_progress']==0 and child.returncode is not None
+            assert worker.proc is None and worker.current_id is None
+            assert source.read_bytes()==b'original-video' and not list(tmp_path.glob('*.tmp.mp4'))
+            if not cancel:
+                db.execute("UPDATE downloads SET status='completed'")
+                monkeypatch.setattr('app.transcoder.smooth_command',lambda src,dst:
+                    [sys.executable,'-c',"import pathlib,sys;pathlib.Path(sys.argv[1]).write_bytes(b'complete')",str(dst)])
+                await worker.process(db.one('SELECT * FROM media'))
+                assert db.one('SELECT smooth_status FROM media')['smooth_status']=='ready'
+                assert source.with_name('original.smooth.mp4').read_bytes()==b'complete'
+        finally:
+            task.cancel();await asyncio.gather(task,return_exceptions=True)
+    try:asyncio.run(check())
+    finally:db.close()
+
+
 @pytest.mark.skipif(not shutil.which('ffmpeg'), reason='ffmpeg is required')
 def test_storyboards_keep_source_and_match_manifest(tmp_path):
     import hashlib, json
