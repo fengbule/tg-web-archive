@@ -1,0 +1,30 @@
+name: tg-web-archive-vps-relay
+services:
+  relay:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=16m
+    environment:
+      RELAY_UPSTREAM: "${RELAY_UPSTREAM:?Set RELAY_UPSTREAM to the existing VPS host:port}"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'envsubst ''$$RELAY_UPSTREAM'' < /etc/nginx/relay.conf.template > /tmp/relay.conf; exec nginx -c /tmp/relay.conf -g "daemon off;"'
+    ports:
+      - "127.0.0.1:${RELAY_HTTP_PORT:-8084}:8084"
+    volumes:
+      - ./deploy/relay/nginx.conf.template:/etc/nginx/relay.conf.template:ro
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 64m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "2"}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8084/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

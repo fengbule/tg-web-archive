@@ -5,6 +5,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 import inspect
 
 PART_SIZE = 512 * 1024
+MAX_PARALLEL_READS = 16
 
 
 @asynccontextmanager
@@ -23,7 +24,7 @@ async def managed(iterator):
 
 
 async def iter_file(client, file, offset, total, parts=3):
-    parts = max(1, min(4, int(parts)))
+    parts = max(1, min(MAX_PARALLEL_READS, int(parts)))
     if total and offset >= total:
         return
     parallel = parts > 1 and total - offset >= 8 * 1024 * 1024

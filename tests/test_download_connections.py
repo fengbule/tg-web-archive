@@ -38,13 +38,13 @@ def document(data):
 
 
 @pytest.mark.parametrize('offset',[0,PART_SIZE+37])
-@pytest.mark.parametrize('parts',[3,4])
-def test_real_telethon_iterators_share_bounded_sockets_and_preserve_bytes(offset,parts):
+@pytest.mark.parametrize('parts,connections',[(3,3),(4,4),(8,8),(16,8),(16,16)])
+def test_real_telethon_iterators_share_bounded_sockets_and_preserve_bytes(offset,parts,connections):
     data=bytes(range(251))*(10*1024*1024//251)+b'tail';client=Client(data);created=[]
     async def factory(client,dc):
         sender=Sender(dc);created.append(sender);return sender
     async def run():
-        pool=DownloadConnections(client,parts,factory=factory);reader=DownloadClient(client,pool)
+        pool=DownloadConnections(client,connections,factory=factory);reader=DownloadClient(client,pool)
         async def collect():
             async with aclosing(iter_file(reader,document(data),offset,len(data),parts)) as chunks:
                 return b''.join([x async for x in chunks])
@@ -52,7 +52,7 @@ def test_real_telethon_iterators_share_bounded_sockets_and_preserve_bytes(offset
             # Two file jobs share one account-wide connection budget.
             a,b=await asyncio.gather(collect(),collect())
             assert a==b==data[offset:]
-            assert len(created)==parts and all(entry.users==0 for entry in pool.entries)
+            assert len(created)==connections and all(entry.users==0 for entry in pool.entries)
             assert not client.native
         finally:await pool.close()
         assert all(sender.closed for sender in created)
@@ -136,6 +136,21 @@ def test_idle_sockets_are_closed_and_can_be_created_again():
     asyncio.run(run())
 
 
+def test_excessive_connection_count_is_capped_across_all_leases():
+    from app.download_connections import MAX_FILE_CONNECTIONS
+    client=Client(b'');created=[]
+    async def factory(client,dc):
+        sender=Sender(dc);created.append(sender);return sender
+    async def run():
+        pool=DownloadConnections(client,10_000,factory=factory)
+        leases=await asyncio.gather(*(pool.borrow(1) for _ in range(32)))
+        assert len(created)==MAX_FILE_CONNECTIONS and sum(e.users for e in pool.entries)==32
+        for sender in leases:await pool.release(sender)
+        assert all(e.users==0 for e in pool.entries)
+        await pool.close();assert all(sender.closed for sender in created)
+    asyncio.run(run())
+
+
 def test_new_sender_cancellation_disconnects_socket_and_keeps_main_init(monkeypatch):
     import app.download_connections as module
     async def run():
@@ -171,4 +186,32 @@ def test_sender_import_uses_fresh_key_and_copy_of_main_init(monkeypatch):
             async def __call__(self,request):return SimpleNamespace(id=123,bytes=b'fixture-export')
         base=Base();assert await create_sender(base,1) is sender
         assert base._init_request.query=='original';await sender.disconnect()
+    asyncio.run(run())
+
+
+def test_existing_file_authorization_opens_fresh_sessions_without_export(monkeypatch):
+    import app.download_connections as module
+    from telethon import functions
+    async def run():
+        key=bytes(range(256));states=[]
+        from telethon.network.mtprotosender import MTProtoSender
+        class Reused(Sender):
+            async def connect(self,connection):pass
+            async def send(self,request):
+                assert isinstance(request.query.query,functions.help.GetConfigRequest)
+        def construct(auth_key,**kwargs):
+            assert bytes(auth_key.key)==key
+            native=MTProtoSender(auth_key,loggers=defaultdict(lambda:logging.getLogger('test')))
+            states.append(native._state.id)
+            return Reused(1)
+        monkeypatch.setattr(module,'MTProtoSender',construct)
+        class Base:
+            _log={};_proxy=None;_local_addr=None;_init_request=SimpleNamespace(query='original')
+            _connection=staticmethod(lambda *a,**kw:object())
+            async def _get_dc(self,dc):return SimpleNamespace(ip_address='127.0.0.1',port=443,id=dc)
+            async def __call__(self,request):raise AssertionError('File key must not export again')
+        base=Base()
+        for _ in range(3):
+            sender=await create_sender(base,1,auth_key=key);await sender.disconnect()
+        assert len(set(states))==3 and base._init_request.query=='original'
     asyncio.run(run())

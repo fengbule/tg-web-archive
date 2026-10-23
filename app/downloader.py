@@ -2,8 +2,9 @@ import asyncio, json, logging, mimetypes, os, shutil, subprocess, time
 from pathlib import Path
 from .db import now
 from contextlib import aclosing
-from .parallel_download import iter_file
-from .download_connections import DownloadConnections, DownloadClient
+from .parallel_download import iter_file, MAX_PARALLEL_READS
+from .download_connections import DownloadConnections, DownloadClient, MAX_FILE_CONNECTIONS
+from telethon.errors import FloodWaitError, FloodPremiumWaitError
 
 log=logging.getLogger('tvm.downloader')
 class UserCancelled(Exception): pass
@@ -13,8 +14,8 @@ class Downloader:
         self.db=db; self.tg=tg; self.root=root; self.media=root/'media'; self.temp=root/'temp'; self.thumbs=root/'thumbnails'
         self.concurrency=concurrency; self.reserve=int(min_free_gb*1024**3); self.workers=[]; self.cancelled=set(); self.pause_requested=set(); self.stopping=False
         self.transcoder=None
-        self.parts=max(1,min(4,int(os.getenv('DOWNLOAD_PARTS','4'))))
-        self.connections=max(1,min(4,int(os.getenv('DOWNLOAD_CONNECTIONS','4'))))
+        self.parts=max(1,min(MAX_PARALLEL_READS,int(os.getenv('DOWNLOAD_PARTS','8'))))
+        self.connections=max(1,min(MAX_FILE_CONNECTIONS,int(os.getenv('DOWNLOAD_CONNECTIONS','8'))))
         self.pools={}
     async def start(self): self.workers=[asyncio.create_task(self.worker(i)) for i in range(self.concurrency)]
     async def stop(self):
@@ -37,12 +38,15 @@ class Downloader:
         while not self.stopping:
             job=None
             try:
-                job=self.db.one("SELECT * FROM downloads WHERE status='queued' ORDER BY id LIMIT 1")
+                job=self.ready_job()
                 if not job: await asyncio.sleep(1); continue
                 changed=self.db.execute("UPDATE downloads SET status='downloading',error='',updated_at=? WHERE id=? AND status='queued'",(now(),job['id'])).rowcount
                 if not changed: await asyncio.sleep(.1); continue
                 await self.download(job)
             except asyncio.CancelledError: raise
+            except (FloodWaitError,FloodPremiumWaitError) as e:
+                if job:self.defer_for_rate_limit(job,int(e.seconds))
+                await asyncio.sleep(1)
             except Exception as e:
                 log.exception('下载 worker 异常 index=%s id=%s',index,job['id'] if job else '-')
                 if job:
@@ -56,6 +60,26 @@ class Downloader:
                             self.db.execute("UPDATE downloads SET status='failed',error=?,speed=0,updated_at=? WHERE id=?",(self.friendly(e),now(),job['id']))
                     except Exception: log.exception('下载任务失败状态写入失败 id=%s',job['id'])
                 await asyncio.sleep(1)
+    def ready_job(self):
+        return self.db.one("""SELECT * FROM downloads AS d WHERE status='queued'
+          AND NOT EXISTS (SELECT 1 FROM config WHERE key='download_wait_until:' || d.account_id
+                          AND CAST(value AS REAL)>?) ORDER BY id LIMIT 1""",(time.time(),))
+    def defer_for_rate_limit(self,job,seconds):
+        account_id=int(job.get('account_id') or 1);key=f'download_wait_until:{account_id}'
+        deadline=time.time()+max(1,seconds)+1
+        old=self.db.one('SELECT value FROM config WHERE key=?',(key,))
+        if old:deadline=max(deadline,float(old['value']))
+        self.db.execute('INSERT OR REPLACE INTO config(key,value) VALUES(?,?)',(key,str(deadline)))
+        temp=self.temp/f"{job['id']}.part";current=temp.stat().st_size if temp.exists() else int(job.get('downloaded_bytes') or 0)
+        paused=job['id'] in self.pause_requested
+        self.pause_requested.discard(job['id'])
+        if job['id'] in self.cancelled:
+            temp.unlink(missing_ok=True);self.cancelled.discard(job['id'])
+            self.db.execute("UPDATE downloads SET status='cancelled',downloaded_bytes=0,temp_path='',speed=0,error='',updated_at=? WHERE id=?",(now(),job['id']))
+            return
+        self.db.execute("UPDATE downloads SET status=?,downloaded_bytes=?,speed=0,error=?,updated_at=? WHERE id=?",
+          ('paused' if paused else 'queued',current,f'Telegram 要求等待 {max(1,seconds)} 秒，将自动续传',now(),job['id']))
+        log.warning('Telegram 下载等待 account=%s seconds=%s；保留断点与重试次数',account_id,seconds)
     def retryable(self,e):
         s=str(e)
         return not isinstance(e,(UserCancelled,ValueError)) and not any(x in s for x in ('磁盘','原消息不存在','不可访问'))

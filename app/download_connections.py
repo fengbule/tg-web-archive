@@ -6,30 +6,123 @@ iterators a small reusable pool; the login Session is never cloned or exported.
 """
 import asyncio
 import copy
+import logging
+import os
+import time
 from dataclasses import dataclass
 from telethon import functions
 from telethon.client.downloads import DownloadMethods
 from telethon.network.mtprotosender import MTProtoSender
+from telethon.crypto import AuthKey
+from telethon.errors import AuthKeyNotFound, AuthKeyUnregisteredError
+from telethon.network.connection import ConnectionTcpAbridged, ConnectionTcpObfuscated
 from telethon.tl.alltlobjects import LAYER
 
+MAX_FILE_CONNECTIONS = 16
+log = logging.getLogger('tvm.file_connections')
 
-async def create_sender(client, dc_id):
+
+async def create_sender(client, dc_id, *, auth_key=None):
     dc = await client._get_dc(dc_id)
-    sender = MTProtoSender(None, loggers=client._log)
+    sender = MTProtoSender(AuthKey(auth_key) if auth_key else None, loggers=client._log)
     try:
         async with asyncio.timeout(25):
             await sender.connect(client._connection(dc.ip_address, dc.port, dc.id,
                 loggers=client._log, proxy=client._proxy, local_addr=client._local_addr))
-            auth = await client(functions.auth.ExportAuthorizationRequest(dc_id))
             # Do not mutate the main client's init request while other requests
-            # are in flight. Every file connection has a fresh in-memory key.
+            # are in flight. Each socket has independent MTProto session state.
             init = copy.copy(client._init_request)
-            init.query = functions.auth.ImportAuthorizationRequest(id=auth.id, bytes=auth.bytes)
+            if auth_key:
+                # Each sender has a fresh MTProto session ID. Reuse only the
+                # pool's in-memory file authorization for this DC, never the
+                # main login Session/key or keys from another host.
+                init.query = functions.help.GetConfigRequest()
+            else:
+                auth = await client(functions.auth.ExportAuthorizationRequest(dc_id))
+                init.query = functions.auth.ImportAuthorizationRequest(id=auth.id, bytes=auth.bytes)
             await sender.send(functions.InvokeWithLayerRequest(LAYER, init))
+        log.info('文件连接已建立 dc=%s address=%s transport=%s reused_file_key=%s',
+                 dc_id, dc.ip_address, client._connection.__name__, bool(auth_key))
         return sender
     except BaseException:
         await sender.disconnect()
         raise
+
+
+class ConnectionSettings:
+    """File-only settings; the account's main connection and Session stay intact."""
+    def __init__(self, base, endpoint, transport):
+        self.base = base
+        self.endpoint = endpoint
+        self._connection = transport
+
+    def __getattr__(self, name):
+        return getattr(self.base, name)
+
+    async def __call__(self, *args, **kwargs):
+        return await self.base(*args, **kwargs)
+
+    async def _get_dc(self, dc_id):
+        if dc_id == self.endpoint.id:
+            return self.endpoint
+        return await self.base._get_dc(dc_id)
+
+
+class FileConnectionFactory:
+    """Opt-in route preference from Telegram's config, with native fallback."""
+    def __init__(self, client, transport=None, strategy=None):
+        self.client = client
+        self.transport = transport or os.getenv('DOWNLOAD_TRANSPORT', 'native')
+        self.strategy = strategy or os.getenv('DOWNLOAD_DC_STRATEGY', 'primary')
+        if self.transport not in ('native', 'abridged', 'obfuscated'):
+            self.transport = 'native'
+        if self.strategy not in ('primary', 'alternate'):
+            self.strategy = 'primary'
+        self.config = None
+        self.retry_after = 0
+        self.auth_keys = {}
+
+    async def _create(self, client, dc_id):
+        try:
+            sender = await create_sender(client, dc_id, auth_key=self.auth_keys.get(dc_id))
+        except (AuthKeyNotFound, AuthKeyUnregisteredError):
+            self.auth_keys.pop(dc_id, None)
+            raise
+        auth = getattr(sender, 'auth_key', None)
+        if auth and auth.key:
+            self.auth_keys[dc_id] = bytes(auth.key)
+        return sender
+
+    def clear_auth(self):
+        self.auth_keys.clear()
+        self.config = None
+
+    async def __call__(self, client, dc_id):
+        if (self.transport == 'native' and self.strategy == 'primary') or time.monotonic() < self.retry_after:
+            return await self._create(client, dc_id)
+        try:
+            primary = await client._get_dc(dc_id)
+            endpoint = primary
+            if self.strategy == 'alternate':
+                if self.config is None:
+                    self.config = await client(functions.help.GetConfigRequest())
+                # Never guess an address or move authorizations between DCs.
+                # Match native address family and role; absence is harmless.
+                endpoint = next((option for option in self.config.dc_options
+                    if option.id == dc_id and not option.cdn
+                    and bool(option.ipv6) == bool(primary.ipv6)
+                    and bool(option.media_only) == bool(primary.media_only)
+                    and option.ip_address != primary.ip_address), primary)
+            transport = {'abridged': ConnectionTcpAbridged,
+                         'obfuscated': ConnectionTcpObfuscated}.get(self.transport, client._connection)
+            return await self._create(ConnectionSettings(client, endpoint, transport), dc_id)
+        except (TimeoutError, ConnectionError, OSError) as error:
+            # Rate-limit/RPC errors and cancellation propagate unchanged. Only
+            # network setup failures may switch back to the original route.
+            self.config = None
+            self.retry_after = time.monotonic() + 60
+            log.warning('文件连接初始化失败，临时回退原始线路 (%s)', type(error).__name__)
+            return await self._create(client, dc_id)
 
 
 @dataclass
@@ -41,11 +134,11 @@ class Entry:
 
 class DownloadConnections:
     """At most N file sockets per account, shared across jobs and destination DCs."""
-    def __init__(self, client, limit=3, idle_seconds=30, factory=create_sender):
+    def __init__(self, client, limit=3, idle_seconds=30, factory=None):
         self.client = client
-        self.limit = max(1, min(4, int(limit)))
+        self.limit = max(1, min(MAX_FILE_CONNECTIONS, int(limit)))
         self.idle_seconds = idle_seconds
-        self.factory = factory
+        self.factory = factory or FileConnectionFactory(client)
         self.entries = []
         self.condition = asyncio.Condition()
         self.idle_task = None
@@ -112,6 +205,9 @@ class DownloadConnections:
             entries, self.entries = self.entries, []
             for entry in entries:
                 await entry.sender.disconnect()
+            clear = getattr(self.factory, 'clear_auth', None)
+            if clear:
+                clear()
 
 
 class DownloadClient:

@@ -64,3 +64,13 @@ def test_complete_partial_does_not_request_file_again():
         def iter_download(self,*args,**kwargs):raise AssertionError('already complete')
     async def run():return [x async for x in iter_file(NoRequests(),None,123,123)]
     assert asyncio.run(run())==[]
+
+
+def test_excessive_parallelism_remains_bounded_and_keeps_order():
+    from app.parallel_download import MAX_PARALLEL_READS
+    data=bytes(range(251))*(20*1024*1024//251)+b'tail';client=Client(data)
+    async def run():
+        async with aclosing(iter_file(client,None,0,len(data),10_000)) as chunks:
+            assert b''.join([x async for x in chunks])==data
+    asyncio.run(run())
+    assert client.active==0 and client.closed==MAX_PARALLEL_READS and client.peak<=MAX_PARALLEL_READS
