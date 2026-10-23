@@ -69,3 +69,21 @@ docker compose ps
 ## 验证
 
 测试覆盖原生 Telethon 迭代器、多个任务共享连接上限、乱序响应按序写入、非对齐断点的精确内容、暂停与续传、迁移/其他 DC 回退、初始化取消、空闲回收、退出账号与应用关闭。生产发布还需核对：镜像内源码哈希、cryptg 实际启用、账号与 auth key 指纹、原任务/断点进度非递减、SQLite quick_check、公网健康以及原有其他服务未变。
+
+## 本次双实例发布结果
+
+应用提交 `aa56d25798ca414a2a89074c1801b45588e8bc5c` 已构建并运行在 VPS 和 InstaBox；文档后续提交无需重建镜像。
+
+- Linux 上 **94 项测试、API 冒烟、依赖审计通过**。两机容器内关键源码 SHA256 与该提交一致，确认 Telethon 使用 cryptg。
+- VPS 新版启动预热后，原有两个活动任务的全部进度在 **40 秒**内合计增加约 20.97MB，实际 **524,275 B/s**。上一版 40 秒样本为 249,030 B/s，约 **2.1 倍**。这是两个时段的真实生产样本，非保证带宽；比单连接对照也有明显改善。样本阶段 CPU 约 1%，未见下载异常、FloodWait 或并发 FFmpeg。
+- 原有 **30 个下载记录**全部保留，任务 ID、账号、频道与消息关联一致，断点进度非递减。更新前已完成的任务保持完成，原可运行队列已恢复。账号、API/管理员密码配置、Session auth key 指纹及 SQLite 完整性检查均通过。
+- 两机公网健康、未登录拒绝媒体访问和授权账号正常。VPS 无头浏览器确认首批 24 条视频、3 个已下载标记、4 张真实 JPEG 封面、追加至 48 条无重复；明暗主题下手机 390/320 与桌面 1440 宽度无溢出，原画附件 Range 206 正常。
+- Akile 容器 ID、配置与 3000 健康接口保持一致；两机 Komari 与 VPS 1Panel 未重启，外部保活未改。
+
+本次更新前备份：
+
+- InstaBox：`/data/workspace/tg-web-archive/backups/tg-web-archive-20261023T072646Z.tar.gz`。
+- VPS：`/root/backups/tg-web-archive-20261023T082017Z-seek-upgrade/`；其中有更新前提交、镜像 ID、私有配置/Session/数据库备份。原画与 `.part` 在原挂载位置保留。
+- 受控测速、验证快照及私有交接：本机 `D:/VibeCoding/Codex/20261020/output/tg-web-archive/`，保持原 ACL 保护；InstaBox 连接与登录文件仍在该目录，VPS SSH 凭据仍在桌面的原 `618hk.txt`。不把凭据内容、数据或日志提交到仓库。
+
+访问地址：[VPS](http://84.54.3.25:8080)、[InstaBox](https://8081-agqv47q5at4mzg6nr336pvg33u.instabox.tech)。后续观察不同 DC/时段的持续吞吐和下载自动重试；如触发限流，降低下载连接/分片数，保留现有断点。
