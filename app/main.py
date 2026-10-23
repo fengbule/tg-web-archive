@@ -438,17 +438,17 @@ def playback(id:int):
     x,_=media_row(id)
     ready=x['original_hls_status']=='ready' and (transcoder.original_directory(id)/'index.m3u8').is_file()
     return {'original':{'type':'hls' if ready else 'file',
-            'url':f'/api/media/{id}/hls/index.m3u8' if ready else f'/api/media/{id}/stream?quality=original'},
+            'url':f'/api/media/{id}/hls/v2/index.m3u8' if ready else f'/api/media/{id}/stream?quality=original'},
             'status':x['original_hls_status']}
 
-@app.get('/api/media/{id}/hls/{name}')
+@app.get('/api/media/{id}/hls/v2/{name}')
 def original_hls(id:int,name:str):
     x,_=media_row(id)
-    if x['original_hls_status']!='ready' or not re.fullmatch(r'(?:index\.m3u8|init\.mp4|segment-[0-9]{5,}\.m4s)',name):
+    if x['original_hls_status']!='ready' or not re.fullmatch(r'(?:index\.m3u8|init\.mp4|segment-[0-9]{5,}\.(?:m4s|ts))',name):
         raise HTTPException(404,'播放分片不存在')
     p=(transcoder.original_directory(id)/name).resolve()
     if MEDIA_ROOT not in p.parents or not p.is_file(): raise HTTPException(404,'播放分片不存在')
-    mime='application/vnd.apple.mpegurl' if name.endswith('.m3u8') else 'video/mp4'
+    mime='application/vnd.apple.mpegurl' if name.endswith('.m3u8') else ('video/mp2t' if name.endswith('.ts') else 'video/mp4')
     headers={'Cache-Control':'private, max-age=3600'}
     if os.getenv('USE_X_ACCEL','false').lower()=='true':
         headers['X-Accel-Redirect']='/protected-media/'+quote(p.relative_to(MEDIA_ROOT).as_posix(),safe='/')

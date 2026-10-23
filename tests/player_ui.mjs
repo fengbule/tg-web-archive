@@ -18,9 +18,10 @@ try{
   await page.evaluate(()=>{localStorage.removeItem('tvm-pos-1');play(1)});
   await page.waitForFunction(()=>document.querySelector('#player')?.currentTime>.1);
   assert.equal(await page.locator('#qualityButton').innerText(),'原画');
-  assert.ok(requests.some(x=>x.endsWith('/hls/index.m3u8')),'must use original HLS');
-  assert.ok(requests.some(x=>x.endsWith('/hls/init.mp4')),'must load muxed init');
+  assert.ok(requests.some(x=>x.endsWith('/hls/v2/index.m3u8')),'must use original HLS');
+  assert.ok(requests.some(x=>x.endsWith('.ts')),'must load muxed progressive TS');
   assert.ok(!(await page.locator('#player').getAttribute('src')).includes('quality=smooth'));
+  assert.ok((await page.locator('#player').getAttribute('src')).startsWith('blob:'),'Chromium must use progressive HLS.js');
   await page.evaluate(()=>document.querySelector('#player').pause());
   // Changing the thumb must seek before pointerup, preserve pause, and retain
   // the final target after rapid inputs rather than an earlier queued seek.
@@ -86,10 +87,21 @@ try{
   await page.waitForFunction(()=>!document.querySelector('#player').paused&&!document.querySelector('#player').seeking);
   const current=await page.locator('#player').evaluate(v=>v.currentTime);assert.ok(current>13&&current<16);
   await page.locator('#playerClose').click();await page.locator('#modal').waitFor({state:'hidden'});
+  // Deliberately hold half the segment for 8s. The player must decode and
+  // play from the first half, before that complete HTTP response arrives.
+  let complete=false;
+  page.on('requestfinished',r=>{if(r.url().endsWith('/slow-hls/segment-00000.ts'))complete=true});
+  await page.route('**/api/media/1/playback',route=>route.fulfill({json:{original:{type:'hls',url:'/__test__/slow-hls/index.m3u8'},status:'ready'}}));
+  const before=requests.length;
+  await page.evaluate(()=>{localStorage.removeItem('tvm-pos-1');play(1)});
+  await page.waitForFunction(()=>document.querySelector('#player')?.currentTime>.15,{},{timeout:6500});
+  assert.equal(complete,false,'must play before complete segment response');
+  assert.ok(!requests.slice(before).some(x=>x.includes('/stream?')),'must not pass through direct-file fallback');
+  await page.locator('#playerClose').click();await page.unroute('**/api/media/1/playback');
   await page.evaluate(()=>go('library'));await page.locator('.media-card-v2').waitFor();
   await page.screenshot({path:'/data/workspace/tg-web-archive-e2e/library-refined-mobile.png',fullPage:true});
   assert.deepEqual(errors,[]);
-  console.log('PLAYER_UI=PASS (original HLS, continuous scrubbing, last target, touch swipe, touch range, pause/resume, quality position, no downgrade, 320/390 touch targets)');
+  console.log('PLAYER_UI=PASS (original HLS, progressive partial response, continuous scrubbing, last target, touch swipe, touch range, pause/resume, quality position, no downgrade, 320/390 touch targets)');
 }catch(error){
   console.error(await page?.locator('body').innerText());console.error(await page.evaluate(()=>Object.fromEntries(['modalBody','playerShell','playerStage','playerSpinner'].map(id=>{const e=document.getElementById(id);return [id,e?{rect:e.getBoundingClientRect().toJSON(),height:e.clientHeight,scroll:e.scrollHeight,maxHeight:getComputedStyle(e).maxHeight,opacity:getComputedStyle(e).opacity,class:e.className}:null]}))));throw error;
 }finally{await browser.close()}

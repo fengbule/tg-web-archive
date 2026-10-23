@@ -330,7 +330,9 @@
       buffer.textContent = quality === 'original' ? '正在准备原画…' : '正在准备流畅版…';
       const original = quality === 'original' && !direct && playback.original.type === 'hls';
       const url = original ? playback.original.url : `/api/media/${id}/stream?quality=${quality}`;
-      if (original && !video.canPlayType('application/vnd.apple.mpegurl') && window.Hls?.isSupported()) {
+      const agent = navigator.userAgent;
+      const nativePreferred = /iP(?:hone|ad|od)/.test(agent) || (/Safari/.test(agent) && !/Chrome|Chromium|Edg|OPR|Android/.test(agent));
+      if (original && !nativePreferred && window.Hls?.isSupported()) {
         hls = new Hls({ autoStartLoad: false, startPosition: at, enableWorker: true, progressive: true,
           maxBufferLength: 24, maxMaxBufferLength: 48, maxBufferSize: 32 * 1024 * 1024, backBufferLength: 30 });
         const instance = hls;

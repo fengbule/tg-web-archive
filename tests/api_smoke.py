@@ -17,7 +17,7 @@ with TestClient(app) as c:
     assert c.get('/health').status_code==200
     assert c.get('/api/dashboard').status_code==401
     assert c.get('/api/media/1/playback').status_code==401
-    assert c.get('/api/media/1/hls/index.m3u8').status_code==401
+    assert c.get('/api/media/1/hls/v2/index.m3u8').status_code==401
     assert c.get('/api/telegram/qr/status').status_code==401
     assert c.post('/api/telegram/qr/start',json={}).status_code==401
     assert c.post('/api/auth/login',json={'password':'wrong'}).status_code==401
@@ -69,19 +69,22 @@ with TestClient(app) as c:
     cur=db.execute("insert into media(channel_id,message_id,channel_title,file_name,file_path,size,downloaded_at) values(1,1,'测试','test.mp4',?,10,'now')",(str(f),)); mid=cur.lastrowid
     playback=c.get(f'/api/media/{mid}/playback').json()
     assert playback['original']['type']=='file'
-    assert c.get(f'/api/media/{mid}/hls/index.m3u8').status_code==404
+    assert c.get(f'/api/media/{mid}/hls/v2/index.m3u8').status_code==404
     cache=root/'media'/'.streams'/str(mid);cache.mkdir(parents=True)
     (cache/'index.m3u8').write_text('#EXTM3U\n#EXT-X-ENDLIST\n')
     (cache/'init.mp4').write_bytes(b'init')
     (cache/'segment-00000.m4s').write_bytes(b'segment')
+    (cache/'segment-00000.ts').write_bytes(b'ts-segment')
     db.execute("UPDATE media SET faststart=1,original_hls_status='ready' WHERE id=?",(mid,))
     assert c.get(f'/api/media/{mid}/playback').json()['original']['type']=='hls'
-    manifest=c.get(f'/api/media/{mid}/hls/index.m3u8')
+    manifest=c.get(f'/api/media/{mid}/hls/v2/index.m3u8')
     assert manifest.status_code==200 and '#EXTM3U' in manifest.text
-    assert c.get(f'/api/media/{mid}/hls/init.mp4').content==b'init'
-    assert c.get(f'/api/media/{mid}/hls/segment-00000.m4s').content==b'segment'
+    assert c.get(f'/api/media/{mid}/hls/v2/init.mp4').content==b'init'
+    assert c.get(f'/api/media/{mid}/hls/v2/segment-00000.m4s').content==b'segment'
+    ts=c.get(f'/api/media/{mid}/hls/v2/segment-00000.ts')
+    assert ts.content==b'ts-segment' and ts.headers['content-type']=='video/mp2t'
     for name in ('app.db','segment-00001.m4s','%2e%2e%2fapp.db'):
-        assert c.get(f'/api/media/{mid}/hls/{name}').status_code==404
+        assert c.get(f'/api/media/{mid}/hls/v2/{name}').status_code==404
     r=c.get(f'/api/media/{mid}/stream',headers={'Range':'bytes=2-5'}); assert r.status_code==206 and r.content==b'2345' and r.headers['content-range']=='bytes 2-5/10'
     assert r.headers['cache-control']=='private, max-age=3600'
     for value, expected, content_range in [

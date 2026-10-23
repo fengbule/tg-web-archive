@@ -53,6 +53,9 @@ class Transcoder:
         # Recover interrupted work without losing the user-visible state.
         self.db.execute("UPDATE media SET faststart=0 WHERE faststart=-1")
         self.db.execute("UPDATE media SET original_hls_status='pending' WHERE original_hls_status='preparing'")
+        for row in self.db.all("SELECT id FROM media WHERE original_hls_status='ready'"):
+            if not (self.original_directory(row['id']) / 'layout-v2').is_file():
+                self.db.execute("UPDATE media SET original_hls_status='pending' WHERE id=?", (row['id'],))
         self.db.execute(
             "UPDATE media SET smooth_status='queued', smooth_error='服务重启后自动继续生成' "
             "WHERE smooth_status='processing'"
@@ -305,10 +308,11 @@ class Transcoder:
             def progress(text):
                 if text.startswith('progress=') and shutil.disk_usage(self.root).free < reserve:
                     raise RuntimeError('已到达磁盘保护线，继续使用原画文件直连')
-            await self._run(original_hls_command(path, temp), progress)
+            await self._run(original_hls_command(path, temp, hevc=video['codec_name']=='hevc'), progress)
             manifest = temp / 'index.m3u8'
             if not manifest.is_file() or '#EXT-X-ENDLIST' not in manifest.read_text():
                 raise RuntimeError('原画分片未完整生成')
+            (temp / 'layout-v2').write_text('progressive-ts-h264-fmp4-hevc\n')
             if not self._source_unchanged(media_id, path): return
             # Publish the complete cache atomically; downloads keep the source.
             shutil.rmtree(destination, ignore_errors=True)

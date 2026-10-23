@@ -115,19 +115,26 @@ def smooth_command(source: Path, destination: Path) -> list[str]:
     ]
 
 
-def original_hls_command(source: Path, destination: Path) -> list[str]:
-    """Remux original A/V into muxed fMP4 segments without re-encoding.
+def original_hls_command(source: Path, destination: Path, hevc: bool = False) -> list[str]:
+    """Remux original A/V into muxed HLS segments without re-encoding.
 
     Both tracks keep the same timestamp origin. Never reset timestamps or
     trim audio/video independently: the browser uses one media clock.
     """
-    return [
+    command = [
         'ffmpeg', '-nostdin', '-y', '-hide_banner', '-loglevel', 'error',
         '-i', str(source), '-map', '0:v:0', '-map', '0:a:0?', '-c', 'copy',
         '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'vod',
-        '-hls_segment_type', 'fmp4', '-hls_flags', 'independent_segments',
-        '-hls_fmp4_init_filename', 'init.mp4',
-        '-hls_segment_filename', str(destination / 'segment-%05d.m4s'),
+        '-hls_flags', 'independent_segments',
+    ]
+    if hevc:
+        command += ['-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', 'init.mp4']
+    else:
+        # TS supports progressive packet demux in HLS.js. A single moof/mdat
+        # fMP4 fragment otherwise needs a complete GOP-sized download first.
+        command += ['-hls_segment_type', 'mpegts']
+    return command + [
+        '-hls_segment_filename', str(destination / ('segment-%05d.m4s' if hevc else 'segment-%05d.ts')),
         '-progress', 'pipe:1', '-nostats', str(destination / 'index.m3u8'),
     ]
 

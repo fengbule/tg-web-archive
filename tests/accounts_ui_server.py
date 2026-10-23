@@ -73,6 +73,22 @@ db.execute("INSERT INTO media(channel_id,message_id,channel_title,file_name,file
     "VALUES(1,1,'创作收藏 · Studio','海岸线的二十四秒 · 原画测试.mp4',?,?,24,640,360,?,1,'queued')",
     (str(media),media.stat().st_size,now()))
 
+@app.get('/__test__/slow-hls/{name}')
+def slow_hls(name:str):
+    import re
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse, StreamingResponse
+    if not re.fullmatch(r'(?:index\.m3u8|init\.mp4|segment-[0-9]{5,}\.(?:m4s|ts))',name):raise HTTPException(404)
+    path=ROOT/'media/.streams/1'/name
+    if not path.is_file():raise HTTPException(404)
+    if not name.endswith(('.m4s','.ts')):return FileResponse(path)
+    async def chunks():
+        data=path.read_bytes();cut=len(data)//2
+        yield data[:cut]
+        await asyncio.sleep(8)
+        yield data[cut:]
+    return StreamingResponse(chunks(),media_type='video/mp2t' if name.endswith('.ts') else 'video/mp4')
+
 @app.post('/__test__/fail-logout/{account_id}')
 def fail_logout(account_id:int):
     svc=tg.service(account_id); failures.add(str(svc.session_dir/svc.session_name)); return {'ok':True}

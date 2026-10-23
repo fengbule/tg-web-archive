@@ -29,16 +29,27 @@ def test_original_segments_keep_encoded_av_and_timing(tmp_path):
         assert row['original_hls_status'] == 'ready', row['original_hls_error']
         manifest = worker.original_directory(1) / 'index.m3u8'
         assert '#EXT-X-ENDLIST' in manifest.read_text()
-        assert len(list(manifest.parent.glob('segment-*.m4s'))) >= 2
+        assert len(list(manifest.parent.glob('segment-*.ts'))) >= 2
+        # Partial HTTP responses must already contain complete small fragments.
+        assert (manifest.parent/'segment-00000.ts').read_bytes()[0] == 0x47
+        assert (manifest.parent/'layout-v2').is_file()
         assert hashlib.sha256(source.read_bytes()).hexdigest() == before
         original = probe_streams(source)
         segmented = probe_streams(manifest)
         assert [s['codec_name'] for s in segmented] == ['h264', 'aac']
-        def stream_hash(path, stream):
-            return subprocess.check_output(['ffmpeg', '-v', 'error', '-i', str(path),
-                '-map', '0:' + stream, '-c', 'copy', '-f', 'streamhash', '-hash', 'sha256', '-']).split(b'=')[-1].strip()
-        # Compressed video packets stay identical: no quality loss.
-        assert stream_hash(source, 'v:0') == stream_hash(manifest, 'v:0')
+        def slices(path):
+            # Compare encoded H264 slice payloads after normalizing AVCC/Annex B
+            # and excluding container-inserted parameter sets and AUD packets.
+            return subprocess.check_output(['ffmpeg','-v','error','-i',str(path),'-map','0:v:0',
+                '-c','copy','-bsf:v','h264_mp4toannexb,filter_units=pass_types=1-5',
+                '-f','streamhash','-hash','sha256','-']).split(b'=')[-1].strip()
+        assert slices(source) == slices(manifest)
+        # Decode the short sample to verify TS packetization does not change pixels.
+        def frames(path):
+            return subprocess.check_output(['ffmpeg','-v','error','-i',str(path),'-map','0:v:0','-f','framemd5','-']).splitlines()
+        def pixels(path):
+            return [line.split(b',')[-1].strip() for line in frames(path) if not line.startswith(b'#')]
+        assert pixels(source) == pixels(manifest)
         # The first AAC priming packet can differ between MP4 and HLS; validate
         # the A/V relative origin and duration rather than ignoring that offset.
         def offset(streams):
@@ -60,6 +71,40 @@ def test_original_low_disk_keeps_source_and_no_partial_cache(tmp_path, monkeypat
         assert db.one('SELECT original_hls_status FROM media')['original_hls_status'] == 'failed'
         assert source.read_bytes() == b'original-video'
         assert not worker.original_directory(1).exists()
+    finally:
+        db.close()
+
+
+def test_original_cache_upgrade_requeues_without_touching_source(tmp_path):
+    db, worker, source = make_optimizer(tmp_path)
+    async def check():
+        db.execute("UPDATE media SET faststart=1,original_hls_status='ready'")
+        await worker.start()
+        assert db.one('SELECT original_hls_status FROM media')['original_hls_status']=='pending'
+        await worker.stop()
+    try:
+        asyncio.run(check())
+        assert source.read_bytes()==b'original-video'
+    finally:
+        db.close()
+
+
+@pytest.mark.skipif(not shutil.which('ffmpeg'), reason='ffmpeg is required')
+def test_hevc_keeps_muxed_fmp4_compatibility(tmp_path):
+    from app.media_tools import probe_streams
+    db, worker, source = make_optimizer(tmp_path)
+    try:
+        subprocess.run(['ffmpeg','-nostdin','-y','-v','error','-f','lavfi','-i',
+            'testsrc2=size=160x90:rate=12','-f','lavfi','-i','sine=sample_rate=48000',
+            '-t','2','-c:v','libx265','-preset','ultrafast','-x265-params',
+            'pools=1:frame-threads=1:log-level=error','-tag:v','hvc1','-c:a','aac',str(source)],
+            check=True,capture_output=True)
+        asyncio.run(worker._original(db.one('SELECT * FROM media'), source))
+        row=db.one('SELECT * FROM media')
+        assert row['original_hls_status']=='ready',row['original_hls_error']
+        root=worker.original_directory(1)
+        assert (root/'init.mp4').is_file() and list(root.glob('*.m4s'))
+        assert [s['codec_name'] for s in probe_streams(root/'index.m3u8')]==['hevc','aac']
     finally:
         db.close()
 
