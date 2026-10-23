@@ -79,14 +79,18 @@ def probe_media(path: Path) -> dict:
     return result
 
 
+def faststart_command(source: Path, destination: Path) -> list[str]:
+    return ["ffmpeg", "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
+         "-i", str(source), "-map", "0:v:0", "-map", "0:a?", "-c", "copy",
+         "-movflags", "+faststart", "-avoid_negative_ts", "make_zero",
+         str(destination)]
+
+
 def remux_faststart(source: Path, destination: Path, timeout: int = 7200) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.unlink(missing_ok=True)
     subprocess.run(
-        ["ffmpeg", "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
-         "-i", str(source), "-map", "0:v:0", "-map", "0:a?", "-c", "copy",
-         "-movflags", "+faststart", "-avoid_negative_ts", "make_zero",
-         str(destination)],
+        faststart_command(source, destination),
         check=True, timeout=timeout,
     )
     if not destination.is_file() or destination.stat().st_size <= 0:
@@ -100,9 +104,10 @@ def smooth_command(source: Path, destination: Path) -> list[str]:
     return [
         "ffmpeg", "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(source),
-        "-vf", f"scale=-2:{SMOOTH_HEIGHT}:force_original_aspect_ratio=decrease",
+        "-vf", f"scale=-2:'min({SMOOTH_HEIGHT},trunc(ih/2)*2)'",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "27",
-        "-maxrate", SMOOTH_MAXRATE, "-bufsize", "1800k",
+        "-maxrate", SMOOTH_MAXRATE, "-bufsize", "1800k", "-g", "48",
+        "-threads", "2", "-pix_fmt", "yuv420p",
         "-profile:v", "high", "-level", "4.0",
         "-c:a", "aac", "-b:a", SMOOTH_AUDIO_BITRATE, "-ac", "2",
         "-movflags", "+faststart", "-progress", "pipe:1", "-nostats",

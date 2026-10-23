@@ -183,7 +183,7 @@
     document.body.appendChild(a);
     a.click();
     a.remove();
-    toast('已开始下载到本机');
+    toast('已请求本机下载，请在浏览器下载列表查看');
   };
 
   window.pMediaMenu = async function (id) {
@@ -193,7 +193,7 @@
     modal(`<h3 style="margin-bottom:4px">${esc(x.file_name)}</h3>
       <p class="muted" style="font-size:12px">${esc(x.channel_title)} · ${fmt(x.size)} · ${x.width}×${x.height} · ${duration(x.duration)}</p>
       <div class="actions" style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:18px">
-        <button onclick="closeModal();play(${id})">${icon('play')} 原画播放</button>
+        <button onclick="closeModal();play(${id},'original')">${icon('play')} 原画播放</button>
         <button class="ghost" onclick="pDownload(${id})">${icon('download')} 下载原画</button>
         ${ready ? `<button class="ghost" onclick="closeModal();play(${id},'smooth')">${icon('zap')} 播放 480P 流畅版</button><button class="ghost" onclick="pDownload(${id},'smooth')">${icon('download')} 下载 480P</button>` : busy ? `<button class="ghost" disabled>${icon('zap')} 流畅版生成中 ${Math.round(x.smooth_progress || 0)}%</button>` : `<button class="ghost" onclick="pStartSmooth(${id},this)">${icon('zap')} 生成 480P 流畅版</button>`}
         <button class="ghost" onclick="closeModal();sendMediaToSaved(${id})">${icon('star')} 上传收藏夹</button>
@@ -232,11 +232,12 @@
   let pResumeToast = false;
 
   window.play = async function (id, preferred) {
+    window.pClosePlayer?.();
     const x = await api('/media/' + id);
     let smooth = smoothReady(x);
-    const autoSmooth = !preferred && smooth && /(^|-)2g$|3g|slow-2g/.test(navigator.connection?.effectiveType || '') ;
-    let quality = preferred === 'smooth' && smooth ? 'smooth' : 'original';
-    if (autoSmooth) quality = 'smooth';
+    // Prefer the small seekable rendition even when a browser reports "4g":
+    // that describes the local connection, not this server's overseas route.
+    let quality = smooth && preferred !== 'original' ? 'smooth' : 'original';
     const src = `/api/media/${id}/stream?quality=${quality}`;
     modal(`<div class="video-modal player-shell">
       <div class="player-top">
@@ -270,7 +271,7 @@
         </div>
       </div>
       <div class="player-foot">
-        <div class="player-meta"><span>画质 <b id="metaQuality">${quality === 'smooth' ? '480P 流畅' : '原画 · 未转码'}</b></span><span>码率 <b id="metaBitrate">${x.size && x.duration ? (x.size * 8 / x.duration / 1e6).toFixed(2) + ' Mbps' : '未知'}</b></span><span>时长 <b>${duration(x.duration)}</b></span><span class="player-hint">空格 播放 · ← → 快进 · F 全屏</span></div>
+        <div class="player-meta"><span>画质 <b id="metaQuality">${quality === 'smooth' ? '480P 流畅' : '原画 · 未转码'}</b></span><span>码率 <b id="metaBitrate">${(quality === 'smooth' ? x.smooth_size : x.size) && x.duration ? ((quality === 'smooth' ? x.smooth_size : x.size) * 8 / x.duration / 1e6).toFixed(2) + ' Mbps' : '未知'}</b></span><span>时长 <b>${duration(x.duration)}</b></span><span class="player-hint">空格 播放 · ← → 快进 · F 全屏</span></div>
         <div class="player-actions"><button class="ghost" id="smoothButton" type="button">${smooth ? '播放 480P 流畅版' : '生成 480P 流畅版'}</button><a href="/api/media/${id}/stream?download=true">${icon('download')}<span>下载到本机</span></a></div>
       </div>
       <div class="player-error" id="playerError" hidden></div>
@@ -290,13 +291,15 @@
     const smoothButton = $('#smoothButton');
     const downloadButton = $('#downloadButton');
     let saveAt = 0;
-    let waitingCount = 0;
+    let stallTimer = null;
+    let smoothTimer = null;
+    let restorePosition = null;
     let dragging = false;
     let closed = false;
 
     const setQualityLink = (q) => {
       downloadButton.href = `/api/media/${id}/stream?download=true${q === 'smooth' ? '&quality=smooth' : ''}`;
-      playToggle.title = '';
+      downloadButton.title = q === 'smooth' ? '下载 480P 流畅版' : '下载原画';
     };
 
     const paint = () => {
@@ -331,12 +334,17 @@
     video.load();
     video.play().catch(() => {});
 
-    const saved = Number(localStorage.getItem('tvm-pos-' + id) || 0);
+    let saved = 0;
+    try { saved = Number(localStorage.getItem('tvm-pos-' + id) || 0); } catch {}
     video.addEventListener('loadedmetadata', () => {
+      video.playbackRate = speed;
       const d = Number(video.duration) || 0;
-      if (saved > 5 && d > 0 && saved < d - 12) {
-        video.currentTime = saved;
-        if (!pResumeToast) {
+      const initial = restorePosition === null;
+      const at = initial ? saved : restorePosition;
+      restorePosition = null;
+      if (at > 0 && d > 0 && at < d - (initial ? 12 : 0)) {
+        video.currentTime = at;
+        if (initial && !pResumeToast) {
           pResumeToast = true;
           toast(`已从上次位置 ${duration(saved)} 继续播放`);
           setTimeout(() => { pResumeToast = false; }, 4000);
@@ -354,14 +362,15 @@
     });
     video.addEventListener('progress', paint);
     video.addEventListener('waiting', () => {
-      waitingCount++;
       showSpinner(true); buffer.hidden = false;
-      if (waitingCount >= 2 && quality === 'original' && smooth && !video.paused) {
-        toast('网络较慢，已自动切换到 480P 流畅版');
-        pSetQuality('smooth');
-      }
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        if (!closed && quality === 'original' && smooth && !video.paused && video.readyState < 3) {
+          pSetQuality('smooth');
+        }
+      }, 3000);
     });
-    video.addEventListener('playing', () => { showSpinner(false); buffer.hidden = true; hideBig(); waitingCount = 0; playToggle.innerHTML = icon('pause'); });
+    video.addEventListener('playing', () => { clearTimeout(stallTimer); showSpinner(false); buffer.hidden = true; hideBig(); playToggle.innerHTML = icon('pause'); });
     video.addEventListener('canplay', () => { showSpinner(false); buffer.hidden = true; });
     video.addEventListener('pause', () => { showBig(); playToggle.innerHTML = icon('play'); });
     video.addEventListener('ended', () => { showBig(); playToggle.innerHTML = icon('play'); });
@@ -424,21 +433,21 @@
     };
 
     const pSetQuality = async (next) => {
+      if (closed) return;
       if (next === quality) return;
       if (next === 'smooth' && !smooth) return;
-      const at = Number(video.currentTime) || 0;
+      restorePosition = restorePosition ?? (Number(video.currentTime) || 0);
       const paused = video.paused;
       quality = next;
       video.src = `/api/media/${id}/stream?quality=${quality}`;
       setQualityLink(quality);
+      video.playbackRate = speed;
       showSpinner(true);
-      video.load();
       const restore = () => {
-        video.currentTime = at;
-        video.removeEventListener('loadedmetadata', restore);
         if (!paused) video.play().catch(() => {});
       };
-      video.addEventListener('loadedmetadata', restore);
+      video.addEventListener('loadedmetadata', restore, { once: true });
+      video.load();
       qualityButton.textContent = quality === 'smooth' ? '480P 流畅' : '原画';
       const metaQuality = $('#metaQuality');
       const metaBitrate = $('#metaBitrate');
@@ -460,26 +469,29 @@
       smoothButton.textContent = '正在生成…';
       try {
         await api(`/media/${id}/smooth`, { method: 'POST' });
-        const timer = setInterval(async () => {
+        clearInterval(smoothTimer);
+        smoothTimer = setInterval(async () => {
           try {
             const state = await api(`/media/${id}/smooth`);
+            if (closed) return;
             smoothButton.textContent = state.ready ? '播放 480P 流畅版' : `生成中 ${Math.round(state.progress)}%`;
             if (state.ready) {
-              clearInterval(timer);
+              clearInterval(smoothTimer);
               smooth = true;
               x.smooth_status = 'ready';
               x.smooth_path = 'ready';
+              x.smooth_size = state.size;
               smoothButton.disabled = false;
               smoothButton.onclick = () => pSetQuality('smooth');
               qualityButton.disabled = false;
               toast('480P 流畅版已生成');
             } else if (state.status === 'failed') {
-              clearInterval(timer);
+              clearInterval(smoothTimer);
               smoothButton.disabled = false;
               smoothButton.textContent = '重新生成 480P';
               toast(state.error || '流畅版生成失败');
             }
-          } catch { clearInterval(timer); smoothButton.disabled = false; }
+          } catch { clearInterval(smoothTimer); smoothButton.disabled = false; }
         }, 2000);
       } catch (e) {
         toast(e.message);
@@ -492,11 +504,16 @@
     const close = () => {
       if (closed) return;
       closed = true;
+      clearTimeout(stallTimer);
+      clearInterval(smoothTimer);
+      document.removeEventListener('keydown', keyHandler);
       try { localStorage.setItem('tvm-pos-' + id, String(Math.floor(video.currentTime || 0))); } catch {}
       video.pause(); video.removeAttribute('src'); video.load();
       $('#modal').removeEventListener('click', onBackdrop);
       closeModal();
+      if (window.pClosePlayer === close) window.pClosePlayer = null;
     };
+    window.pClosePlayer = close;
     $('#playerClose').onclick = close;
     $('#modal').addEventListener('click', onBackdrop);
 
@@ -562,8 +579,10 @@
   /* ---------------- telegram login ---------------- */
   let pQrTimer = null;
   let pQrAccount = null;
+  let pQrRun = 0;
 
   function pQrStop(cancel = false) {
+    pQrRun++;
     clearInterval(pQrTimer);
     pQrTimer = null;
     if (cancel && pQrAccount !== null) api(`/telegram/qr/cancel?account_id=${pQrAccount}`, { method: 'POST' }).catch(() => {});
@@ -627,6 +646,7 @@
     $('#pQrCancel').onclick = () => { stop(); $('#pQrPanel').hidden = true; $('#pQrImage').removeAttribute('src'); $('#pQrStart').disabled = false; };
     $('#pQrStart').onclick = async () => {
       stop();
+      const run = pQrRun;
       const fields = {};
       if (!$('#pApiFieldsQr').hidden) {
         fields.api_id = Number($('#pApiId').value) || null;
@@ -636,19 +656,23 @@
       $('#pQrStart').disabled = true;
       $('#pQrPanel').hidden = false;
       $('#pQrStatus').textContent = '正在安全生成二维码…';
+      pQrAccount = accountId;
       try {
         const state = await api(`/telegram/qr/start?account_id=${accountId}`, { method: 'POST', body: JSON.stringify(fields) }, 60000);
-        if (activePage !== 'telegram') return;
-        pQrAccount = accountId;
-        pRenderQr(state, accountId);
+        if (run !== pQrRun || activePage !== 'telegram') {
+          api(`/telegram/qr/cancel?account_id=${accountId}`, { method: 'POST' }).catch(() => {});
+          return;
+        }
+        pRenderQr(state, accountId, run);
       } catch (e) {
+        if (run !== pQrRun || activePage !== 'telegram') return;
         $('#pQrStatus').textContent = e.message;
         $('#pQrStart').disabled = false;
       }
     };
 
-    function pRenderQr(state, account) {
-      if (activePage !== 'telegram') return;
+    function pRenderQr(state, account, run) {
+      if (run !== pQrRun || activePage !== 'telegram') return;
       if (state.state === 'authorized') {
         pQrStop(false); toast('Telegram 扫码登录成功'); loadAccounts().catch(() => {}); go('channels');
         return;
@@ -667,8 +691,9 @@
         pQrTimer = setInterval(async () => {
           try {
             const next = await api(`/telegram/qr/status?account_id=${account}`);
-            pRenderQr(next, account);
+            pRenderQr(next, account, run);
           } catch (e) {
+            if (run !== pQrRun || activePage !== 'telegram') return;
             clearInterval(pQrTimer);
             status.textContent = e.message;
             $('#pQrStart').disabled = false;
@@ -740,16 +765,16 @@
     const rows = await loadAccounts();
     if (activePage !== 'accounts') return;
     content.innerHTML = `<div class="account-page">
-      <div class="account-page-heading"><div><h3>Telegram 账号</h3><p class="muted">每个账号使用独立 Session，可分别扫码或 API 登录，随时切换。</p></div><button onclick="addAccount()">${icon('plus')} 添加账号</button></div>
-      <div class="account-list">${rows.map((a) => `<article class="card account-card ${a.active ? 'is-current' : ''}">
+      <div class="account-page-heading"><div><h3>Telegram 账号</h3><p class="muted">每个账号使用独立 Session，可分别扫码或 API 登录，随时切换。</p></div><button id="addAccountButton" onclick="addAccount()">${icon('plus')} 添加账号</button></div>
+      <div class="account-list">${rows.map((a) => `<article class="card account-card ${a.active ? 'is-current' : ''}" data-account-id="${a.id}">
         <div class="account-avatar">${esc((a.label || '?').trim().slice(0, 1))}</div>
         <div class="account-details"><h3>${esc(a.label)} ${a.active ? '<span class="current-account-badge">当前账号</span>' : ''}</h3><p>${esc(a.name || '')}${a.phone ? ' · ' + esc(a.phone) : ''}</p><span class="account-state ${a.authorized ? 'connected' : ''}">${a.status === 'unavailable' ? '状态暂不可用，请刷新' : a.authorized ? '● 已登录' : '○ 未登录'}</span></div>
         <div class="account-card-actions">
           ${a.active ? '' : `<button class="ghost" onclick="switchAccount(${a.id})">切换账号</button>`}
           ${!a.authorized ? `<button onclick="pAccountLogin(${a.id})">${icon('zap')} 扫码 / API 登录</button>` : ''}
-          <button class="ghost" onclick="renameAccount(${a.id})">重命名</button>
-          ${a.authorized !== false || a.session_exists ? `<button class="ghost ghost-danger" onclick="endAccountSession(${a.id})">结束会话</button>` : ''}
-          ${rows.length > 1 ? `<button class="ghost" onclick="removeAccount(${a.id})">移除账号</button>` : ''}
+          <button class="ghost" data-action="rename" onclick="renameAccount(${a.id})">重命名</button>
+          ${a.authorized !== false || a.session_exists ? `<button class="ghost ghost-danger" data-action="logout" onclick="endAccountSession(${a.id})">结束会话</button>` : ''}
+          ${rows.length > 1 ? `<button class="ghost" data-action="remove" onclick="removeAccount(${a.id})">移除账号</button>` : ''}
         </div>
       </article>`).join('')}</div>
       <div class="card account-help"><h3>账号与会话</h3><p>切换账号会保留登录；结束会话会撤销本应用在 Telegram 的登录，下次使用需重新扫码或验证码登录。手机和其他设备的登录保持有效。</p><p class="muted">每个账号的 Session、消息和下载来源独立保存。已下载视频保留在本地媒体库；退出后台仅退出网页管理端。</p><button class="ghost" onclick="go('accounts')">${icon('refresh')} 刷新登录状态</button></div>

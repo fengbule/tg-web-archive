@@ -360,6 +360,7 @@ def safe_unlink(value):
         size=p.stat().st_size; p.unlink(missing_ok=True); return size
     except OSError: return 0
 def delete_media_record(x):
+    if transcoder.current_id==int(x['id']): raise HTTPException(409,'视频正在优化，请等待完成或先取消流畅版生成')
     try: transcoder.cancel_smooth(int(x['id']))
     except Exception: pass
     removed=safe_unlink(x.get('file_path')); safe_unlink(x.get('thumb_path'))
@@ -381,6 +382,7 @@ def bulk_delete_media(b:BulkDelete):
     if not b.all and not b.ids: raise HTTPException(400,'请选择要删除的视频')
     ids=list(dict.fromkeys(b.ids))
     rows=db.all('SELECT * FROM media') if b.all else db.all('SELECT * FROM media WHERE id IN ('+','.join('?' for _ in ids)+')',tuple(ids))
+    if any(x['id']==transcoder.current_id for x in rows): raise HTTPException(409,'选中的视频正在优化，请等待完成或先取消流畅版生成')
     removed=sum(delete_media_record(x) for x in rows)
     return {'deleted':len(rows),'bytes':removed}
 @app.get('/api/media/download-zip')
@@ -413,7 +415,9 @@ def smooth_status(id:int):
             'error':x['smooth_error'] or '','size':int(x['smooth_size'] or 0),'ready':ready}
 @app.post('/api/media/{id}/smooth')
 def start_smooth(id:int):
-    x,p=media_row(id); transcoder.enqueue_smooth(id)
+    x,p=media_row(id)
+    try: transcoder.enqueue_smooth(id)
+    except ValueError as exc: raise HTTPException(409,str(exc)) from None
     return smooth_status(id)
 @app.delete('/api/media/{id}/smooth')
 def remove_smooth(id:int):
@@ -476,6 +480,7 @@ class Rename(BaseModel): name:str=Field(min_length=1,max_length=240)
 @app.patch('/api/media/{id}')
 def rename(id:int,b:Rename):
     x,p=media_row(id); name=Path(b.name).name
+    if transcoder.current_id==id: raise HTTPException(409,'视频正在优化，请等待完成后重命名')
     if name!=b.name or name in ('.','..'): raise HTTPException(400,'文件名不合法')
     new=p.with_name(f"{x['message_id']}_{name}")
     if new.exists() and new!=p: raise HTTPException(409,'同名文件已存在')

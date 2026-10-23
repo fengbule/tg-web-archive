@@ -52,9 +52,12 @@ def zip_media_files(items: Iterable[tuple[str, Path]], chunk_size: int = 1024 * 
     try:
         for name, path in items:
             info = zipfile.ZipInfo(_unique_name(name, used))
+            info.file_size = Path(path).stat().st_size
             info.compress_type = zipfile.ZIP_STORED
             info.flag_bits |= 0x08  # data descriptor, required for streams
-            with archive.open(info, "w") as target, Path(path).open("rb") as source:
+            # The local header cannot be rewritten on an HTTP stream. Reserve
+            # ZIP64 fields up front so large videos (including >4 GiB) work.
+            with archive.open(info, "w", force_zip64=True) as target, Path(path).open("rb") as source:
                 while True:
                     chunk = source.read(chunk_size)
                     if not chunk:

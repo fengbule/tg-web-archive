@@ -35,7 +35,7 @@ def test_missing_or_empty_file_is_safe(tmp_path):
 def test_smooth_command_uses_480p_and_faststart(tmp_path):
     command = smooth_command(tmp_path / "in.mp4", tmp_path / "out.mp4")
     joined = " ".join(command)
-    assert "scale=-2:480" in joined
+    assert "min(480,trunc(ih/2)*2)" in joined
     assert "+faststart" in joined
     assert "libx264" in joined
 
@@ -58,3 +58,15 @@ def test_zip_stream_deduplicates_names(tmp_path):
     payload = b"".join(zip_media_files([("same.bin", path), ("same.bin", path)]))
     archive = zipfile.ZipFile(io.BytesIO(payload))
     assert archive.namelist() == ["same.bin", "same (2).bin"]
+
+
+def test_zip_stream_large_entry_uses_zip64(tmp_path, monkeypatch):
+    # Exercise the >2 GiB transition without allocating gigabytes in CI.
+    monkeypatch.setattr(zipfile, 'ZIP64_LIMIT', 512)
+    path = tmp_path / 'large.bin'
+    path.write_bytes(b'large-video' * 200)
+    payload = b''.join(zip_media_files([('large.bin', path)], chunk_size=64))
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        assert archive.testzip() is None
+        assert archive.read('large.bin') == path.read_bytes()
+        assert archive.getinfo('large.bin').extract_version >= 45

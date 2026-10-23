@@ -1,19 +1,21 @@
 import assert from 'node:assert/strict';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const url=process.env.TEST_URL||'http://127.0.0.1:8082';
-const browser=await chromium.launch({executablePath:'/usr/bin/chromium',headless:true,args:['--no-sandbox']});
+const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',headless:true,args:['--no-sandbox']});
+let page;
 try{
-  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];
+  page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];
   page.on('pageerror',e=>errors.push(e.message));
   await page.goto(url);await page.locator('#adminPassword').fill('fixture-admin-password');await page.locator('#adminLoginButton').click();
-  const openAccounts=async()=>{await page.getByRole('button',{name:'管理 Telegram 账号',exact:true}).click();await page.locator('#addAccountButton').waitFor()};
+  await page.locator('#app').waitFor({state:'visible'});
+  const openAccounts=async()=>{await page.evaluate(()=>go('accounts'));await page.locator('#addAccountButton').waitFor()};
   const row=id=>page.locator(`[data-account-id="${id}"]`);
   await openAccounts();assert.match(await row(1).innerText(),/已登录/);
   await page.locator('#addAccountButton').click();await page.locator('#accountLabel').fill('备用账号');await page.locator('#accountSaveButton').click();
-  await page.locator('#qrStartButton').waitFor();assert.equal(await page.locator('#inlineApiId').count(),0);
+  await page.locator('#pQrStart').waitFor();assert.equal(await page.locator('#pApiFieldsQr').isVisible(),false);
   const second=Number(await page.locator('#accountSelector').inputValue());assert.notEqual(second,1);
-  await page.locator('#qrStartButton').click();await page.locator('#inlinePasswordForm').waitFor();
-  await page.locator('#inlinePassword').fill('fixture-2fa-password');await page.locator('#inlinePasswordForm button').click();
+  await page.locator('#pQrStart').click();await page.locator('#p2fa').waitFor();
+  await page.locator('#p2fa').fill('fixture-2fa-password');await page.locator('#p2faSubmit').click();
   await page.waitForFunction(()=>document.querySelector('#pageTitle').textContent==='频道视频');
   await openAccounts();assert.match(await row(second).innerText(),/已登录/);assert.match(await row(1).innerText(),/已登录/);
   await row(second).locator('[data-action="rename"]').click();await page.locator('#accountLabel').fill('<工作账号>');await page.locator('#accountSaveButton').click();
@@ -28,6 +30,16 @@ try{
   assert.match(await row(1).innerText(),/已登录/);
   await row(second).locator('[data-action="remove"]').click();await page.locator('#confirmEndSession').click();await row(second).waitFor({state:'detached'});
   assert.equal(await page.locator('#accountSelector').inputValue(),'1');assert.match(await row(1).innerText(),/已登录/);
+  await page.locator('#addAccountButton').click();await page.locator('#accountLabel').fill('API 登录测试');await page.locator('#accountSaveButton').click();
+  await page.locator('#pSendCode').waitFor({state:'attached'});
+  const phoneAccount=Number(await page.locator('#accountSelector').inputValue());
+  await page.locator('[data-tab="api"]').click();
+  await page.locator('#pPhone').fill('+1234567890');await page.locator('#pSendCode').click();
+  await page.locator('#pCode').waitFor();await page.locator('#pCode').fill('12345');await page.locator('#pVerifyCode').click();
+  await page.locator('#p2fa').waitFor();await page.locator('#p2fa').fill('fixture-2fa-password');await page.locator('#p2faSubmit').click();
+  await page.waitForFunction(()=>document.querySelector('#pageTitle').textContent==='频道视频');
+  await openAccounts();assert.match(await row(phoneAccount).innerText(),/已登录/);
+  await row(phoneAccount).locator('[data-action="remove"]').click();await page.locator('#confirmEndSession').click();await row(phoneAccount).waitFor({state:'detached'});
   await page.setViewportSize({width:390,height:844});await openAccounts();
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.screenshot({path:'/data/workspace/tg-web-archive-e2e/accounts-fixture-mobile.png',fullPage:true,animations:'disabled'});
@@ -39,7 +51,10 @@ try{
   await page.screenshot({path:'/data/workspace/tg-web-archive-e2e/accounts-fixture-desktop.png',fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:320,height:740});await openAccounts();
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-  await page.reload();await openAccounts();assert.equal(await page.locator('.account-card').count(),1);
+  await page.reload();await page.locator('#app').waitFor({state:'visible'});await page.locator('#pageTitle').filter({hasText:'仪表盘'}).waitFor();await openAccounts();assert.equal(await page.locator('.account-card').count(),1);
   assert.deepEqual(errors,[]);
-  console.log('ACCOUNTS_UI=PASS (add, QR/2FA fixture, rename, cancel, failure/retry, scoped logout, remove, fallback, refresh, mobile)');
+  console.log('ACCOUNTS_UI=PASS (add, QR and phone/API with 2FA fixtures, rename, cancel, failure/retry, scoped logout, remove, fallback, refresh, mobile)');
+}catch(error){
+  console.error(await page.locator('body').innerText());
+  throw error;
 }finally{await browser.close()}

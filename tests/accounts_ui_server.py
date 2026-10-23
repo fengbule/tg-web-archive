@@ -38,7 +38,13 @@ class FakeClient:
     async def is_user_authorized(self): return states.get(str(self.path),False)
     async def get_me(self): return SimpleNamespace(first_name='测试',last_name='账号',phone='1234567890')
     async def qr_login(self): return FakeQR()
-    async def sign_in(self,**kwargs):
+    async def send_code_request(self,phone):
+        assert phone == '+1234567890'
+        return SimpleNamespace(phone_code_hash='fixture-code-hash')
+    async def sign_in(self,*args,**kwargs):
+        if len(args)>1 or 'code' in kwargs:
+            assert (args[1] if len(args)>1 else kwargs['code']) == '12345'
+            raise SessionPasswordNeededError(request=None)
         assert kwargs['password']=='fixture-2fa-password'
         states[str(self.path)]=True
     async def log_out(self):
