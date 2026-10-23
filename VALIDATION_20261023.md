@@ -1,42 +1,37 @@
-# 2026-10-23 双实例升级验收
+# 2026-10-23 双实例最终验收
 
-## 版本
+应用提交：`fce63e48619127c23d99f6fa9d2ab7528bf7b871`。本报告覆盖本轮实际执行；此前 `7ba4f2c` 的验收记录属于历史版本。
 
-- 仓库 `main`：`7ba4f2ce9e941ce6618961e3a521e28c58f5de3e`
-- 变更：faststart 播放索引、480P 流畅版、扫码/手机号双登录、深色控制台 UI、原画/批量下载。
-- 自动测试：47 passed，1 failed，1 skipped。唯一失败是 `tests/test_init_instabox.py` 在 Windows 上调用 `os.getuid`（Linux 专用脚本），与本次业务改动无关。
+## 测试与发布
 
-## VPS `84.54.3.25:8080`
+- 基于最新 `main` 融合已有多账号、双登录、UI、faststart 和流畅版；修复 UTF-8 页面损坏、ZIP64、画质切换进度、扫码异步响应与转码进程生命周期。
+- Linux Docker：**56 passed**，真实 FFmpeg 索引与转码测试通过；API_SMOKE=PASS；依赖审计没有已知漏洞。
+- 无头 Chromium 隔离账号测试：扫码/2FA、手机号/API/验证码/2FA、重命名、取消结束会话、网络失败保留与重试、账号隔离/移除/回退、刷新、390/320 手机布局通过。Telegram 使用模拟客户端，不触碰真实授权。
+- 两台服务器均拉取该应用提交、完成镜像构建、后台部署退出码 0，应用与 Nginx healthy，公网 /health 200；运行中的静态文件及后端源码摘要一致。
 
-- 代码目录 `/opt/telegram-video-manager`，提交 `7ba4f2c`，应用与 Nginx 容器 healthy，`/health` 200。
-- 部署前一致备份：`/root/backups/tg-web-archive-20261022-162837-pre`（`app.db` 65536 B，私有数据 998349 B）。
-- 原有账号保留：`accounts=1`，`authorized=True`，名称“养乐多”。
-- 管理员密码：`.env` 原哈希保留，未修改；数据库内密码记录未改动。
-- faststart：原 MP4 `moov` 位于偏移 32，`mdat` 位于 3,598,471；大小由 1,667,203,765 变为 1,668,231,365。
-- 480P：`*.smooth.mp4` 83,883,498 B（约 202 kbps），状态 `ready`。
-- 播放跳转：480P 从 0 秒跳到 30:00，`seek_seconds=2.55`，随后 `currentTime=1804.96` 且继续播放；缓冲区已扩展到 1797–1807、1903–2053 秒。
-- 下载：`GET /api/media/6/stream?download=true` + Range 返回 206、`Content-Disposition: attachment`、正确中文文件名；批量 ZIP 返回 `application/zip` 和 `PK` 头。
-- 无头 Chromium 1440×950 与 390×844：登录、仪表盘、媒体库、播放器、Telegram 登录、设置页无 console/page error。
-- 单连接外部吞吐实测约 0.7–1.5 Mbps，原画 4 Mbps 不适合直接串流；480P 是慢线路的推荐画质。
+## 公网结果
 
-## InstaBox
+| 检查 | 香港 VPS | InstaBox |
+| --- | --- | --- |
+| 原账号授权 | 1 个，仍 authorized | 1 个，仍 authorized |
+| 原媒体 | 原 1 条视频及流畅版保留 | 原媒体库为空 |
+| Range / 下载 | 原画与流畅版 206、非法 416/no-store | 同左 |
+| 播放跳转 | 真实约 55 分钟视频跳至 30:00，1.12 秒恢复 | 合成 20 秒视频跳至 12 秒，0.02 秒就绪 |
+| 画质切换 | 原画/流畅版切换保留进度 | 同左 |
+| 本机下载 | 测试视频流畅版完整保存 Windows，字节数匹配 | 同左 |
+| 批量 ZIP | 完整测试 ZIP 下载、解压和内容校验 | 同左 |
+| UI | 桌面 1440 与手机 390/320，无页面脚本错误和横向溢出 | 同左 |
 
-- 机器 `m_agqv47q5at4mzg6nr336pvg33u`，代码目录 `/data/workspace/tg-web-archive`，提交 `7ba4f2c`。
-- 部署前备份：`backups/tg-web-archive-20261022T172808Z.tar.gz`。
-- 新镜像 `tg-web-archive-app:7ba4f2ce9e94`，应用与 Nginx healthy，本地 `/health` 200，公网 `https://8081-agqv47q5at4mzg6nr336pvg33u.instabox.tech/health` 200。
-- 数据库新增 `faststart` / `smooth_*` 列；原有 `accounts=1` 保留。
-- 原管理员密码登录返回 200；账号 `authorized=True`（xiao wan），Session 保留。
-- Akile 容器保持运行；`komari-agent` 为 active/running。
-- 部署由平台 exec 在后台完成，检查了 `exitCode=0`、`timedOut=false`，未只依赖 HTTP 200。
+原 VPS 视频 1,668,231,365 字节、流畅版 83,883,498 字节未变。两台仅创建专用合成测试媒体，结束后清理自身测试记录及文件；原 accounts/media/downloads/outbox 计数不变。SQLite quick_check=ok，密码/API 配置与 Session 授权密钥摘要保持一致；VPS .env 完全一致，InstaBox 仅更新镜像标签。容器重建后真实授权及数据保留。
 
-## 回滚
+Akile 容器 ID、配置摘要、Komari PID 均未变；Akile /healthz 200。VPS 的 1Panel 与监控保持运行；未操作外部保活。
 
-- VPS：见 `docs/VPS-618HK.md`；旧代码在备份目录 `code-old`，数据兼容新列。
-- InstaBox：旧镜像 `tg-web-archive-app:e9f77a571fd4` 仍在，按 `docs/INSTABOX.md` 使用旧 `IMAGE_TAG` 回退；涉及结构变更时同时恢复配套 `.env` 与 `data/`。
+## 备份与交接
 
-## 未执行/待观察
+- VPS：`/root/backups/tg-web-archive-20261023T004509Z-seek-upgrade`。
+- InstaBox：项目内 `backups/tg-web-archive-20261023T004524Z.tar.gz`。
+- 详细管理、更新、回滚和限制见 [本轮升级说明](docs/UPGRADE_20261023.md)、[VPS 运维](docs/VPS-618HK.md)、[InstaBox 运维](docs/INSTABOX.md)。凭据和测试产物只保存在受保护本地目录，不提交仓库。
 
-- 未修改 VPS 管理员密码，也没有执行真实“结束会话”测试。
-- 未在 VPS 上实际下载完整 1.6 GB 文件到手机/电脑，只验证了 Range、附件头和 ZIP 响应。
-- 未让 InstaBox 生成 480P（该实例媒体库为空，且默认 `AUTO_SMOOTH=false`）。
-- 两个实例的真实扫码登录未在本轮重新执行；账号现有 Session 均保持 authorized。
+## 未验证与待观察
+
+未让真实账号重新扫码、接收验证码或结束会话，以保护已有登录；没有完整下载原 1.6 GB 视频，也没有真机 Safari 验收。公网跳转耗时是当前线路的实测结果，不保证所有时段或原画均瞬间起播。原画约 4 Mbps，线路吞吐不足时仍建议流畅版；新视频生成 480P 需要后台 CPU 时间。

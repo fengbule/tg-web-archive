@@ -2,7 +2,7 @@
 
 本说明对应 2026-10-22 的私人测试部署。仓库初始 `ACCEPTANCE_TEST.md` 是历史报告，不能作为本实例真实 Telegram 登录、下载或上传成功的证据。实际地址、管理员密码、平台连接凭据和验收产物保存在操作者的受保护目录，不提交 Git。
 
-> 2026-10-23 更新：已升级到 `7ba4f2c`，新增 faststart 自动重封装、480P 流畅版、扫码/手机号双登录、深色控制台 UI 和原画/ZIP 下载。本实例默认 `AUTO_SMOOTH=false`，可在媒体库或播放器手动生成流畅版。升级后原账号和 Session 保持 `authorized`，Akile 与 Komari 未改动。详细验收见仓库根 `VALIDATION_20261023.md`。
+> 2026-10-23 最新更新：应用已升级到 `fce63e4`，保留并修复 faststart、480P 流畅版、扫码/API 双登录、深色 UI 和本机下载，增加 ZIP64、画质切换进度保留与转码保护。本实例默认 `AUTO_SMOOTH=false`，可手动生成流畅版；原账号、密码和 Session 保留，Akile 与 Komari 未改动。最新实测和备份见 [本轮升级说明](UPGRADE_20261023.md) 及仓库根 `VALIDATION_20261023.md`。
 
 ## 实例边界
 

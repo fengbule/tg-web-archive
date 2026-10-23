@@ -2,6 +2,8 @@
 
 记录日期：2026-10-23（北京时间）。本文件不包含密码、SSH 私钥、Session 或任何密钥值。
 
+最新应用为 `fce63e4`；本轮保留 `.env` 原字节与现有授权，已验证默认 480P、真实 30:00 跳转约 1.12 秒、画质切换保留进度、本机完整测试文件下载与 ZIP 解压。历史初次迁移步骤保留在下文，本轮更新与新备份以 [最新升级记录](UPGRADE_20261023.md) 为准。
+
 ## 实例
 
 | 项目 | 值 |
@@ -10,12 +12,12 @@
 | 系统 | Debian 13，2 vCPU，约 2 GB 内存 |
 | 代码目录 | `/opt/telegram-video-manager`（Git 工作树） |
 | Git 远端 | `https://github.com/fengbule/tg-web-archive.git` |
-| 已部署提交 | `7ba4f2ce9e941ce6618961e3a521e28c58f5de3e` |
+| 已部署应用提交 | `fce63e48619127c23d99f6fa9d2ab7528bf7b871` |
 | Compose 项目 | `telegram-video-manager` |
 | 容器 | `telegram-video-manager`、`telegram-video-manager-nginx` |
 | 数据目录 | `/data/telegram-video-manager`（独立 246 GB 数据盘） |
 | 端口 | 宿主机 `8080` → Nginx `80` → 应用 `8000` |
-| 备份 | `/root/backups/tg-web-archive-20261022-162837-pre`（部署前一致快照） |
+| 最新备份 | `/root/backups/tg-web-archive-20261023T004509Z-seek-upgrade`（旧备份也保留） |
 
 `.env` 从旧部署原样保留（`ADMIN_PASSWORD_HASH_B64`、`SESSION_SECRET`、`CONFIG_ENCRYPTION_KEY` 等），只追加了 `AUTO_SMOOTH=true` 和 `APP_VERSION=2.0.0`。管理员密码未修改；数据库中已有 `admin_password_pbkdf2` 时仍以数据库为准。
 
@@ -85,7 +87,7 @@ docker compose up -d --build
 
 - 原文件索引已移动到文件头，浏览器不再需要先读取 1.6 GB 文件的尾部。
 - 原画码率约 4 Mbps；该 VPS 到部分中国网络的实测单连接吞吐可能只有 0.7–1.5 Mbps，因此慢网络下应切换到 480P 流畅版。
-- 本次 55 分钟视频的 480P 文件约 84 MB（约 200 kbps），实测从 0 秒拖到 30:00 后 2.55 秒恢复播放，缓冲区间会继续向前扩展。
+- 本次 55 分钟视频的 480P 文件约 84 MB（约 200 kbps）；最新发布默认使用流畅版，实测从开头拖到 30:00 后 1.12 秒恢复播放。该值是单次公网实测，线路变化会影响结果。
 - `AUTO_SMOOTH=true` 会让新下载的视频自动生成流畅版；如需节省 CPU，可在 `.env` 改为 `false` 后重启 app，媒体库仍有手动“生成 480P”入口。
 - 流畅版文件位于原视频同目录，文件名以 `.smooth.mp4` 结尾；删除视频时会一并清理。
 
