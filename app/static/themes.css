@@ -67,6 +67,12 @@ html[data-theme=light] .seek-played{background:#536ee3}
 html[data-theme=light] .seek-thumb{background:#536ee3;box-shadow:0 0 0 4px #536ee318}
 html[data-theme=light] .seek-preview{color:#f0f3fa}
 html[data-theme=light] .player-error{color:#b93550}
+html[data-theme=light] .player-shell:fullscreen .player-top{background:linear-gradient(#080c14e8,#080c1400);color:#f0f3fa}
+html[data-theme=light] .player-shell:fullscreen .player-controls{background:linear-gradient(#080c1400,#080c14f5);color:#f0f3fa}
+html[data-theme=light] .player-shell:fullscreen .ctl{color:#e5ebf5}
+html[data-theme=light] .player-shell:fullscreen .ctl:hover{background:#ffffff16;color:#fff}
+html[data-theme=light] .player-shell:fullscreen .primary-play{background:#e7edff;color:#243253}
+html[data-theme=light] .player-shell:fullscreen .time,html[data-theme=light] .player-shell:fullscreen .seek-times,html[data-theme=light] .player-shell:fullscreen #gestureHint,html[data-theme=light] .player-shell:fullscreen .player-title p{color:#c6d2e5}
 html[data-theme=light] .login-card{background:#ffffffed;border-color:var(--line);box-shadow:0 20px 60px #20335315}
 html[data-theme=light] .login-hero .brand-line{color:var(--text)}
 html[data-theme=light] .grad-text{background:linear-gradient(110deg,#4967da,#258b94);background-clip:text;color:transparent}

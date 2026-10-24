@@ -255,40 +255,42 @@
       <div class="player-stage" id="playerStage">
         <video id="player" playsinline webkit-playsinline preload="auto" poster="${x.thumb_path ? thumbUrl(x) : ''}"></video>
         <div class="player-spinner" id="playerSpinner"></div>
-        <div class="stage-actions">
-          <button class="skip-button" id="skipBack" type="button" aria-label="后退 10 秒">${icon('refresh')}<span>10</span></button>
-          <button class="player-bigplay" id="bigPlay" type="button" aria-label="播放">${icon('play')}</button>
-          <button class="skip-button" id="skipForward" type="button" aria-label="前进 10 秒">${icon('refresh')}<span>10</span></button>
-        </div>
         <div class="seek-preview" id="seekPreview" hidden><div class="seek-frame" role="img" aria-label="目标时间附近的画面预览" hidden></div><b></b><small>松手后继续 · 横滑可精细定位</small></div>
         <div class="buffer-status" id="bufferStatus" hidden>正在准备原画…</div>
       </div>
       <div class="player-controls">
-        <div class="seek-times"><span id="elapsedTime">0:00</span><span id="gestureHint">拖动进度条 · 画面横滑快进</span><span>${duration(x.duration)}</span></div>
+        <div class="seek-times"><span id="elapsedTime">0:00</span><span id="gestureHint">轻点显隐按钮 · 横滑快进</span><span>${duration(x.duration)}</span></div>
         <div class="seek-wrap" id="seekWrap">
           <div class="seek-track"><div class="seek-buffer" id="seekBuffer"></div><div class="seek-played" id="seekPlayed"></div></div>
           <div class="seek-thumb" id="seekThumb"></div>
           <input class="seek-input" id="seekInput" type="range" min="0" max="10000" value="0" step="1" aria-label="播放进度" aria-valuetext="0:00">
         </div>
         <div class="controls-row">
-          <button class="ctl primary-play" id="playToggle" type="button" aria-label="播放/暂停">${icon('play')}</button>
-          <span class="time" id="timeLabel">0:00 / ${duration(x.duration)}</span><span class="ctl-spacer"></span>
-          <div class="volume-wrap" id="volumeWrap"><input id="volumeInput" type="range" min="0" max="1" step="0.05" value="1" aria-label="音量"></div>
-          <button class="ctl" id="muteToggle" type="button" aria-label="静音">${icon('volume')}</button>
-          <button class="ctl" id="speedButton" type="button" aria-label="播放速度">1×</button>
-          <button class="ctl" id="pipButton" type="button" aria-label="画中画">${icon('pip')}</button>
-          <a class="ctl" id="downloadButton" href="/api/media/${id}/stream?download=true" download title="下载原画到本机" aria-label="下载到本机">${icon('download')}</a>
-          <button class="ctl" id="fullscreenButton" type="button" aria-label="全屏">${icon('expand')}</button>
+          <div class="transport-controls">
+            <button class="ctl primary-play" id="playToggle" type="button" aria-label="播放" title="播放">${icon('play')}</button>
+            <button class="ctl skip-button" id="skipBack" type="button" aria-label="后退 10 秒" title="后退 10 秒">${icon('refresh')}<span>10</span></button>
+            <button class="ctl skip-button" id="skipForward" type="button" aria-label="前进 10 秒" title="前进 10 秒">${icon('refresh')}<span>10</span></button>
+            <span class="time" id="timeLabel">0:00 / ${duration(x.duration)}</span>
+          </div>
+          <div class="player-tools">
+            <div class="volume-wrap" id="volumeWrap"><input id="volumeInput" type="range" min="0" max="1" step="0.05" value="1" aria-label="音量"></div>
+            <button class="ctl" id="muteToggle" type="button" aria-label="静音">${icon('volume')}</button>
+            <button class="ctl" id="speedButton" type="button" aria-label="播放速度">1×</button>
+            <button class="ctl" id="pipButton" type="button" aria-label="画中画">${icon('pip')}</button>
+            <a class="ctl" id="downloadButton" href="/api/media/${id}/stream?download=true" download title="下载原画到本机" aria-label="下载到本机">${icon('download')}</a>
+            <button class="ctl" id="fullscreenButton" type="button" aria-label="全屏">${icon('expand')}</button>
+          </div>
         </div>
       </div>
       <div class="player-foot"><div class="player-meta"><span class="original-pill" id="metaQuality">${quality === 'smooth' ? '480P 流畅' : '原画 · 原始编码'}</span><span id="metaBitrate"></span><span>音画同步播放</span></div><div class="player-actions"><button class="ghost" id="smoothButton" type="button">${smooth ? '切换流畅版' : '生成流畅版'}</button><a href="/api/media/${id}/stream?download=true" download>${icon('download')} 下载原文件</a></div></div>
       <div class="player-error" id="playerError" role="status" hidden></div>
     </div>`, true);
     const video = $('#player'), stage = $('#playerStage'), spinner = $('#playerSpinner');
-    const bigPlay = $('#bigPlay'), buffer = $('#bufferStatus'), playToggle = $('#playToggle');
+    const buffer = $('#bufferStatus'), playToggle = $('#playToggle');
     const seek = $('#seekInput'), played = $('#seekPlayed'), buffered = $('#seekBuffer'), thumb = $('#seekThumb');
     const qualityButton = $('#qualityButton'), smoothButton = $('#smoothButton'), downloadButton = $('#downloadButton');
     let scrubber;
+    const controls = attachPlayerControls({ shell: $('#playerShell'), stage, video, scrubbing: () => scrubber?.dragging() });
     const storyboard = createSeekPreview(id, $('#seekPreview'));
     const preview = (at, active = false) => {
       const d = Number(video.duration) || Number(x.duration) || 0;
@@ -377,16 +379,23 @@
     });
     const ready = () => { if (!closed) { showSpinner(false); buffer.hidden = true; } };
     video.addEventListener('canplay', ready);
-    video.addEventListener('playing', () => { ready(); stage.classList.add('is-playing'); bigPlay.innerHTML = icon('pause'); playToggle.innerHTML = icon('pause'); });
-    video.addEventListener('pause', () => { stage.classList.remove('is-playing'); bigPlay.innerHTML = icon('play'); playToggle.innerHTML = icon('play'); });
-    video.addEventListener('ended', () => { stage.classList.remove('is-playing'); playToggle.innerHTML = icon('play'); });
+    const syncPlayButton = () => {
+      const playing = !video.paused && !video.ended;
+      playToggle.innerHTML = icon(playing ? 'pause' : 'play');
+      playToggle.setAttribute('aria-label', playing ? '暂停' : '播放');
+      playToggle.title = playing ? '暂停' : '播放';
+    };
+    video.addEventListener('play', syncPlayButton);
+    video.addEventListener('playing', ready);
+    video.addEventListener('pause', syncPlayButton);
+    video.addEventListener('ended', syncPlayButton);
     video.addEventListener('error', () => {
       if (closed || !video.error) return;
       if (quality === 'original' && hls && !direct) { direct = true; mount(restorePosition ?? video.currentTime, restorePosition !== null ? resumeOnReady : !video.paused); return; }
       ready(); error('原画暂时无法播放。可重试、下载原文件，或手动切换流畅版；画质不会自动降低。');
     });
     const toggle = () => { if (video.paused) video.play().catch(() => {}); else video.pause(); };
-    playToggle.onclick = toggle; bigPlay.onclick = toggle; video.addEventListener('click', toggle);
+    playToggle.onclick = toggle;
     const skip = seconds => { video.currentTime = Math.max(0, Math.min((video.duration || 0) - .05, video.currentTime + seconds)); paint(); };
     $('#skipBack').onclick = () => skip(-10); $('#skipForward').onclick = () => skip(10);
     scrubber = attachMediaScrubber({ video, input: seek, stage, preview,
@@ -442,7 +451,7 @@
     const backdrop = event => { if (event.target.id === 'modal') close(); };
     const close = () => {
       if (closed) return;
-      closed = true; sourceRun++; clearInterval(smoothTimer); scrubber.destroy(); storyboard.destroy();
+      closed = true; sourceRun++; clearInterval(smoothTimer); controls.destroy(); scrubber.destroy(); storyboard.destroy();
       try { localStorage.setItem('tvm-pos-' + id, String(restorePosition ?? video.currentTime)); } catch {}
       hls?.destroy(); hls = null; video.pause(); video.removeAttribute('src'); video.load();
       document.removeEventListener('keydown', keyHandler); $('#modal').removeEventListener('click', backdrop);
