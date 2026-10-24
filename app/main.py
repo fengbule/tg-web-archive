@@ -15,6 +15,8 @@ from .outbox import OutboxSender
 from .transcoder import Transcoder
 from .zipstream import zip_media_files
 from .account_backup import collect_accounts, encrypt_backup, decrypt_backup, restore_accounts, MAX_BACKUP_BYTES
+from .favorites import Favorites
+from typing import Literal
 
 logging.basicConfig(level=os.getenv('LOG_LEVEL','INFO'),format='%(asctime)s %(levelname)s %(name)s %(message)s')
 log=logging.getLogger('tvm')
@@ -22,6 +24,7 @@ ROOT=Path(os.getenv('DATA_ROOT','/data/telegram-video-manager')).resolve()
 MEDIA_ROOT=(ROOT/'media').resolve()
 for d in ('media','temp','database','session','config','thumbnails'): (ROOT/d).mkdir(parents=True,exist_ok=True)
 db=Database(ROOT/'database'/'app.db'); db.init()
+favorites=Favorites(db)
 secret=os.environ['SESSION_SECRET']; serializer=URLSafeTimedSerializer(secret,salt='admin-session')
 cipher=Fernet(os.environ['CONFIG_ENCRYPTION_KEY'].encode())
 tg=TelegramManager(ROOT/'session',ROOT/'thumbnails'/'telegram',db,cipher)
@@ -261,7 +264,10 @@ async def telegram_logout(clear:bool=False,account_id:int|None=None): return awa
 @app.get('/api/channels')
 async def channels(q:str='',refresh:bool=False): return await tg.channels(q,refresh)
 @app.get('/api/channels/{channel_id}/videos')
-async def videos(channel_id:int,offset_id:int=0,limit:int=30): return await tg.videos(channel_id,offset_id,limit)
+async def videos(channel_id:int,offset_id:int=0,limit:int=30):
+    result=await tg.videos(channel_id,offset_id,limit)
+    favorites.mark(result['items'],result['account_id'])
+    return result
 @app.get('/api/channels/{channel_id}/videos/{message_id}/thumbnail')
 async def telegram_thumbnail(channel_id:int,message_id:int,account_id:int|None=None):
     service=qr_service(account_id if account_id is not None else tg.active_id)
@@ -352,7 +358,36 @@ def media(q:str='',channel_id:int|None=None,sort:str='time'):
     if q: where.append('(file_name LIKE ? OR channel_title LIKE ?)'); args += [f'%{q}%',f'%{q}%']
     if channel_id is not None: where.append('channel_id=?'); args.append(channel_id)
     order={'time':'downloaded_at DESC','name':'file_name COLLATE NOCASE','size':'size DESC'}.get(sort,'downloaded_at DESC')
-    return db.all('SELECT * FROM media'+((' WHERE '+' AND '.join(where)) if where else '')+' ORDER BY '+order+' LIMIT 1000',args)
+    return favorites.mark(db.all('SELECT * FROM media'+((' WHERE '+' AND '.join(where)) if where else '')+' ORDER BY '+order+' LIMIT 1000',args))
+
+class FavoriteCreate(BaseModel):
+    media_id:int|None=Field(default=None,gt=0)
+    account_id:int|None=Field(default=None,gt=0)
+    channel_id:int|None=Field(default=None,ge=-(2**63)+1,le=2**63-1)
+    message_id:int|None=Field(default=None,gt=0,le=2**31-1)
+    channel_title:str=Field(default='',max_length=512)
+    file_name:str=Field(default='',max_length=1024)
+    size:int=Field(default=0,ge=0,le=2**63-1)
+    duration:float=Field(default=0,ge=0,le=1e8,allow_inf_nan=False)
+    width:int=Field(default=0,ge=0,le=100000)
+    height:int=Field(default=0,ge=0,le=100000)
+    has_thumbnail:bool=False
+
+@app.get('/api/favorites')
+def list_favorites(q:str=Query(default='',max_length=200),account_id:int|None=None,
+                   state:Literal['all','downloaded','pending']='all',sort:Literal['recent','name']='recent',
+                   offset:int=Query(default=0,ge=0),limit:int=Query(default=60,ge=1,le=100)):
+    return favorites.listing(q,account_id,state,sort,offset,limit)
+
+@app.put('/api/favorites')
+def add_favorite(body:FavoriteCreate):
+    try: return favorites.add(body.model_dump(),tg.active_id)
+    except LookupError as e: raise HTTPException(404,str(e))
+    except ValueError as e: raise HTTPException(400,str(e))
+
+@app.delete('/api/favorites/{account_id}/{channel_id}/{message_id}')
+def remove_favorite(account_id:int,channel_id:int,message_id:int):
+    return favorites.remove(account_id,channel_id,message_id)
 class OutboxCreate(BaseModel):
     peer_id:int
     media_id:int
@@ -379,7 +414,7 @@ def retry_outbox(id:int):
 def media_by_source(channel_id:int,message_id:int):
     x=db.one('SELECT * FROM media WHERE account_id=? AND channel_id=? AND message_id=?',(tg.active_id,channel_id,message_id))
     if not x: raise HTTPException(404,'本地视频不存在')
-    return x
+    return favorites.mark([x])[0]
 def media_row(id):
     x=db.one('SELECT * FROM media WHERE id=?',(id,))
     if not x: raise HTTPException(404,'视频不存在')
@@ -462,7 +497,7 @@ def remove_smooth(id:int):
     db.execute("UPDATE media SET smooth_path='',smooth_status='idle',smooth_progress=0,smooth_size=0,smooth_error='已移除流畅版' WHERE id=?",(id,))
     return {'ok':True}
 @app.get('/api/media/{id}')
-def media_detail(id:int): return media_row(id)[0]
+def media_detail(id:int): return favorites.mark([media_row(id)[0]])[0]
 @app.get('/api/media/{id}/sendability')
 async def media_sendability(id:int):
     x,_=media_row(id); return await tg.media_sendability(int(x.get('account_id') or 1),x)

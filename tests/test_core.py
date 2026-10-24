@@ -124,11 +124,14 @@ def test_self_entity_uses_telegram_me_peer():
     assert asyncio.run(service._entity(123456))=='self-peer'
     assert client.requested==['me']
 
-def test_saved_messages_has_dedicated_desktop_and_mobile_entry():
+def test_video_favorites_and_telegram_saved_messages_remain_accessible():
     root=Path(__file__).parents[1]
     html=(root/'app/static/index.html').read_text(encoding='utf-8')
     js=(root/'app/static/app.js').read_text(encoding='utf-8')
-    assert html.count('data-page="saved"')==2
+    favorites=(root/'app/static/favorites.js').read_text(encoding='utf-8')
+    assert html.count('data-page="favorites"')==2
+    assert html.count('data-page="saved"')==1
+    assert 'onclick="go(\'saved\')"' in favorites
     assert "saved:savedPage" in js
     assert "activePage==='saved'" in js
     assert "completed:'已发送'" in js

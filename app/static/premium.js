@@ -61,12 +61,15 @@
         </div>
         <div class="media-actions">
           <button type="button" onclick="play(${x.id})">${icon('play')} 播放原画</button>
+          ${videoFavorites.button(x)}
           <button type="button" class="icon-action" onclick="pDownload(${x.id})" title="下载原画">${icon('download')}</button>
           <button type="button" class="icon-action" onclick="pMediaMenu(${x.id})" title="更多操作">${icon('chevron')}</button>
         </div>
       </div>
     </article>`;
   }
+
+  window.nebulaMediaCard = mediaCard;
 
   /* ---------------- dashboard ---------------- */
   window.dashboard = async function () {
@@ -249,13 +252,14 @@
     let hls = null, direct = false, sourceRun = 0, closed = false;
     let restorePosition = 0, resumeOnReady = true, firstLoad = true;
     let smoothTimer = null, saveAt = 0, speed = 1, episodeRequest = 0;
-    const contextIds = activePage === 'library' ? [...document.querySelectorAll('#mediaGrid .media-card-v2')].map(card => Number(card.dataset.mediaId))
+    const contextIds = activePage === 'favorites' ? (window.favoritePlaybackRows || []).map(item => Number(item.id)) : activePage === 'library' ? [...document.querySelectorAll('#mediaGrid .media-card-v2')].map(card => Number(card.dataset.mediaId))
       : activePage === 'channels' ? [...document.querySelectorAll('.catalog-card[data-local-media-id]:not([hidden])')].map(card => Number(card.dataset.localMediaId)) : [];
-    const contextRows = activePage === 'library' ? libraryPlayback : null;
+    const contextRows = activePage === 'favorites' ? (window.favoritePlaybackRows || []) : activePage === 'library' ? libraryPlayback : null;
     modal(`<div class="video-modal player-shell" id="playerShell"><div class="player-viewport" id="playerViewport">
       <div class="player-top">
         <div class="player-title"><span class="player-eyebrow">NOW PLAYING</span><h3>${esc(x.file_name)}</h3><p>${esc(x.channel_title)} · ${x.width} × ${x.height} · ${fmt(x.size)}</p></div>
         <span class="lock-status" id="lockStatus" hidden></span>
+        ${videoFavorites.button(x, 'ctl', 'playerFavorite')}
         <button class="quality-btn" id="qualityButton" data-lock-disable type="button" ${smooth ? '' : 'disabled'} title="切换原画 / 流畅版">${quality === 'smooth' ? '480P 流畅' : '原画'}</button>
         <button class="ctl" id="playerClose" data-lock-disable type="button" aria-label="关闭播放器">${icon('x')}</button>
       </div>
@@ -391,6 +395,7 @@
         shell.dataset.mediaId = String(id);
         smooth = smoothReady(x); quality = 'original'; direct = false; firstLoad = true; saveAt = 0;
         shell.querySelector('.player-title h3').textContent = x.file_name;
+        $('#playerFavorite').outerHTML = videoFavorites.button(x, 'ctl', 'playerFavorite');
         shell.querySelector('.player-title p').textContent = `${x.channel_title} · ${x.width} × ${x.height} · ${fmt(x.size)}`;
         $('#totalTime').textContent = duration(x.duration);
         video.poster = thumbUrl(x);

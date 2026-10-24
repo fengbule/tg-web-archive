@@ -46,6 +46,13 @@ class Database:
         CREATE INDEX IF NOT EXISTS idx_download_status ON downloads(status);
         CREATE INDEX IF NOT EXISTS idx_media_channel ON media(channel_id);
         CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status);
+        CREATE TABLE IF NOT EXISTS favorites(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,account_id INTEGER NOT NULL,channel_id INTEGER NOT NULL,message_id INTEGER NOT NULL,
+          channel_title TEXT NOT NULL DEFAULT '',file_name TEXT NOT NULL,size INTEGER NOT NULL DEFAULT 0,
+          duration REAL NOT NULL DEFAULT 0,width INTEGER NOT NULL DEFAULT 0,height INTEGER NOT NULL DEFAULT 0,
+          has_thumbnail INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,
+          UNIQUE(account_id,channel_id,message_id));
+        CREATE INDEX IF NOT EXISTS idx_favorites_created ON favorites(created_at DESC,id DESC);
         ''')
             for table,column,decl in [('downloads','account_id','INTEGER NOT NULL DEFAULT 1'),('downloads','retry_count','INTEGER NOT NULL DEFAULT 0'),('media','account_id','INTEGER NOT NULL DEFAULT 1'),
                                       ('media','faststart','INTEGER NOT NULL DEFAULT 0'),('media','smooth_path',"TEXT NOT NULL DEFAULT ''"),
