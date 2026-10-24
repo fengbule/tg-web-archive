@@ -67,12 +67,21 @@ html[data-theme=light] .seek-played{background:#536ee3}
 html[data-theme=light] .seek-thumb{background:#536ee3;box-shadow:0 0 0 4px #536ee318}
 html[data-theme=light] .seek-preview{color:#f0f3fa}
 html[data-theme=light] .player-error{color:#b93550}
-html[data-theme=light] .player-shell:fullscreen .player-top{background:linear-gradient(#080c14e8,#080c1400);color:#f0f3fa}
-html[data-theme=light] .player-shell:fullscreen .player-controls{background:linear-gradient(#080c1400,#080c14f5);color:#f0f3fa}
-html[data-theme=light] .player-shell:fullscreen .ctl{color:#e5ebf5}
-html[data-theme=light] .player-shell:fullscreen .ctl:hover{background:#ffffff16;color:#fff}
-html[data-theme=light] .player-shell:fullscreen .primary-play{background:#e7edff;color:#243253}
-html[data-theme=light] .player-shell:fullscreen .time,html[data-theme=light] .player-shell:fullscreen .seek-times,html[data-theme=light] .player-shell:fullscreen #gestureHint,html[data-theme=light] .player-shell:fullscreen .player-title p{color:#c6d2e5}
+html[data-theme=light] .player-shell:is(:fullscreen,.is-locked) .player-top{background:linear-gradient(#080c14e8,#080c1400);color:#f0f3fa}
+html[data-theme=light] .player-shell:is(:fullscreen,.is-locked) .player-controls{background:linear-gradient(#080c1400,#080c14f5);color:#f0f3fa}
+html[data-theme=light] .player-shell:is(:fullscreen,.is-locked) .ctl{color:#e5ebf5}
+html[data-theme=light] .player-shell:is(:fullscreen,.is-locked) .ctl:hover{background:#ffffff16;color:#fff}
+html[data-theme=light] .player-shell:is(:fullscreen,.is-locked) .primary-play{background:#e7edff;color:#243253}
+html[data-theme=light] .player-shell:is(:fullscreen,.is-locked) .time,html[data-theme=light] .player-shell:is(:fullscreen,.is-locked) .seek-times,html[data-theme=light] .player-shell:is(:fullscreen,.is-locked) #gestureHint,html[data-theme=light] .player-shell:is(:fullscreen,.is-locked) .player-title p{color:#c6d2e5}
+html[data-theme=light] .player-navigation{border-color:var(--line)}
+html[data-theme=light] .player-navigation button{color:#425672;background:#f3f6fc;border-color:#e0e7f2}
+html[data-theme=light] .player-navigation button:hover:not(:disabled){background:#e8eefb;color:#253852}
+html[data-theme=light] .player-shell:is(:fullscreen,.is-locked) .player-navigation{border-color:#ffffff20}
+html[data-theme=light] .player-shell:is(:fullscreen,.is-locked) .player-navigation button{color:#e5ebf5;background:#ffffff09;border-color:#ffffff20}
+html[data-theme=light] .player-episodes{--episode-bg:#fffffff5;--episode-text:#23344f;--episode-muted:#64738a;--episode-line:#dfe6f1;--episode-hover:#edf2fc;--episode-selected:#eef2ff}
+html[data-theme=light] .player-shell .player-episodes .ctl{color:var(--episode-text)}
+html[data-theme=light] .player-shell .player-episodes .ctl:hover{background:var(--episode-hover);color:var(--episode-text)}
+html[data-theme=light] #episodeSearch{background:#f3f6fc;border-color:var(--line);color:#23344f}
 html[data-theme=light] .login-card{background:#ffffffed;border-color:var(--line);box-shadow:0 20px 60px #20335315}
 html[data-theme=light] .login-hero .brand-line{color:var(--text)}
 html[data-theme=light] .grad-text{background:linear-gradient(110deg,#4967da,#258b94);background-clip:text;color:transparent}

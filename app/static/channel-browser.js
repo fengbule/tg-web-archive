@@ -15,6 +15,8 @@
     const status = x.downloaded ? 'completed' : x.download_status;
     const busy = ['queued','downloading','pausing','retrying'].includes(status);
     card.dataset.status = status || 'new';
+    if (x.downloaded && x.local_media_id) card.dataset.localMediaId = String(x.local_media_id);
+    else delete card.dataset.localMediaId;
     card.querySelector('.catalog-status').textContent = (labels[status] || '未下载') + (status === 'downloading' ? ` ${Math.round(x.download_progress || 0)}%` : '');
     card.querySelector('.catalog-state').textContent = labels[status] || '可加入下载';
     const checkbox = card.querySelector('input');checkbox.disabled = x.downloaded || busy;

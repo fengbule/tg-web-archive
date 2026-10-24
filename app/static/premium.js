@@ -27,6 +27,7 @@
   const thumbUrl = (x) => (x.thumb_path ? `/api/media/${x.id}/thumbnail` : '');
   const smoothReady = (x) => x && x.smooth_status === 'ready' && x.smooth_path;
   const smoothBusy = (x) => x && (x.smooth_status === 'queued' || x.smooth_status === 'processing');
+  let libraryPlayback = [];
 
   function mediaCard(x, opts = {}) {
     const ready = smoothReady(x);
@@ -119,6 +120,7 @@
 
   /* ---------------- library ---------------- */
   window.library = function () {
+    libraryPlayback = [];
     selectedMedia.clear();
     content.innerHTML = `
       <div class="library-heading"><div><span class="eyebrow">YOUR COLLECTION</span><h3>你的媒体空间</h3><p>原画播放，随时继续。轻松保存到手机与电脑。</p></div><span class="library-count" id="libraryCount"></span></div>
@@ -143,6 +145,7 @@
     const xs = await api(`/media?q=${q}&sort=${sort}`);
     const box = $('#mediaGrid');
     if (!box) return;
+    libraryPlayback = xs;
     if ($('#libraryCount')) $('#libraryCount').textContent = `${xs.length} 个视频`;
     const ids = new Set(xs.map((x) => Number(x.id)));
     [...selectedMedia].forEach((id) => { if (!ids.has(id)) selectedMedia.delete(id); });
@@ -236,7 +239,7 @@
   window.play = async function (id, preferred) {
     const request = ++playerRequest;
     window.pClosePlayer?.();
-    const [x, playback] = await Promise.all([
+    let [x, playback] = await Promise.all([
       api('/media/' + id),
       api(`/media/${id}/playback`).catch(() => ({ original: { type: 'file', url: `/api/media/${id}/stream?quality=original` } })),
     ]);
@@ -245,12 +248,16 @@
     let quality = preferred === 'smooth' && smooth ? 'smooth' : 'original';
     let hls = null, direct = false, sourceRun = 0, closed = false;
     let restorePosition = 0, resumeOnReady = true, firstLoad = true;
-    let smoothTimer = null, saveAt = 0, speed = 1;
-    modal(`<div class="video-modal player-shell" id="playerShell">
+    let smoothTimer = null, saveAt = 0, speed = 1, episodeRequest = 0;
+    const contextIds = activePage === 'library' ? [...document.querySelectorAll('#mediaGrid .media-card-v2')].map(card => Number(card.dataset.mediaId))
+      : activePage === 'channels' ? [...document.querySelectorAll('.catalog-card[data-local-media-id]:not([hidden])')].map(card => Number(card.dataset.localMediaId)) : [];
+    const contextRows = activePage === 'library' ? libraryPlayback : null;
+    modal(`<div class="video-modal player-shell" id="playerShell"><div class="player-viewport" id="playerViewport">
       <div class="player-top">
         <div class="player-title"><span class="player-eyebrow">NOW PLAYING</span><h3>${esc(x.file_name)}</h3><p>${esc(x.channel_title)} · ${x.width} × ${x.height} · ${fmt(x.size)}</p></div>
-        <button class="quality-btn" id="qualityButton" type="button" ${smooth ? '' : 'disabled'} title="切换原画 / 流畅版">${quality === 'smooth' ? '480P 流畅' : '原画'}</button>
-        <button class="ctl" id="playerClose" type="button" aria-label="关闭播放器">${icon('x')}</button>
+        <span class="lock-status" id="lockStatus" hidden></span>
+        <button class="quality-btn" id="qualityButton" data-lock-disable type="button" ${smooth ? '' : 'disabled'} title="切换原画 / 流畅版">${quality === 'smooth' ? '480P 流畅' : '原画'}</button>
+        <button class="ctl" id="playerClose" data-lock-disable type="button" aria-label="关闭播放器">${icon('x')}</button>
       </div>
       <div class="player-stage" id="playerStage">
         <video id="player" playsinline webkit-playsinline preload="auto" poster="${x.thumb_path ? thumbUrl(x) : ''}"></video>
@@ -259,7 +266,7 @@
         <div class="buffer-status" id="bufferStatus" hidden>正在准备原画…</div>
       </div>
       <div class="player-controls">
-        <div class="seek-times"><span id="elapsedTime">0:00</span><span id="gestureHint">轻点显隐按钮 · 横滑快进</span><span>${duration(x.duration)}</span></div>
+        <div class="seek-times"><span id="elapsedTime">0:00</span><span id="gestureHint">轻点显隐按钮 · 横滑快进</span><span id="totalTime">${duration(x.duration)}</span></div>
         <div class="seek-wrap" id="seekWrap">
           <div class="seek-track"><div class="seek-buffer" id="seekBuffer"></div><div class="seek-played" id="seekPlayed"></div></div>
           <div class="seek-thumb" id="seekThumb"></div>
@@ -276,22 +283,36 @@
             <div class="volume-wrap" id="volumeWrap"><input id="volumeInput" type="range" min="0" max="1" step="0.05" value="1" aria-label="音量"></div>
             <button class="ctl" id="muteToggle" type="button" aria-label="静音">${icon('volume')}</button>
             <button class="ctl" id="speedButton" type="button" aria-label="播放速度">1×</button>
-            <button class="ctl" id="pipButton" type="button" aria-label="画中画">${icon('pip')}</button>
-            <a class="ctl" id="downloadButton" href="/api/media/${id}/stream?download=true" download title="下载原画到本机" aria-label="下载到本机">${icon('download')}</a>
-            <button class="ctl" id="fullscreenButton" type="button" aria-label="全屏">${icon('expand')}</button>
+            <button class="ctl" id="lockButton" type="button" aria-label="锁定界面方向" aria-pressed="false" title="锁定界面方向，仍可快进和选集">${icon('unlock')}</button>
+            <button class="ctl" id="pipButton" data-lock-disable type="button" aria-label="画中画">${icon('pip')}</button>
+            <a class="ctl" id="downloadButton" data-lock-disable href="/api/media/${id}/stream?download=true" download title="下载原画到本机" aria-label="下载到本机">${icon('download')}</a>
+            <button class="ctl" id="fullscreenButton" data-lock-disable type="button" aria-label="全屏">${icon('expand')}</button>
           </div>
         </div>
+        <div class="player-navigation">
+          <button class="episode-step" id="previousEpisode" type="button" disabled>${icon('previous')}<span>上一集</span></button>
+          <button class="episode-picker" id="episodesButton" type="button" aria-controls="episodePanel" aria-expanded="false">${icon('list')}<span>选集 · 读取中</span></button>
+          <button class="episode-step" id="nextEpisode" type="button" disabled><span>下一集</span>${icon('next')}</button>
+        </div>
       </div>
-      <div class="player-foot"><div class="player-meta"><span class="original-pill" id="metaQuality">${quality === 'smooth' ? '480P 流畅' : '原画 · 原始编码'}</span><span id="metaBitrate"></span><span>音画同步播放</span></div><div class="player-actions"><button class="ghost" id="smoothButton" type="button">${smooth ? '切换流畅版' : '生成流畅版'}</button><a href="/api/media/${id}/stream?download=true" download>${icon('download')} 下载原文件</a></div></div>
+      <section class="player-episodes" id="episodePanel" hidden aria-label="播放列表">
+        <div class="episode-heading"><div><b>播放列表</b><p id="episodeDescription">正在读取…</p></div><button class="ctl" id="episodeClose" type="button" aria-label="关闭选集">${icon('x')}</button></div>
+        <input id="episodeSearch" type="search" placeholder="搜索集数或视频名称" aria-label="搜索选集">
+        <div class="episode-list" id="episodeList"></div><p class="episode-empty" id="episodeEmpty" hidden>没有匹配的视频</p>
+        <button class="ghost" id="episodeRetry" type="button" hidden>重新读取列表</button><button class="ghost" id="episodeMore" type="button" hidden>显示更多</button>
+      </section>
+      <div class="player-foot"><div class="player-meta"><span class="original-pill" id="metaQuality">${quality === 'smooth' ? '480P 流畅' : '原画 · 原始编码'}</span><span id="metaBitrate"></span><span>音画同步播放</span></div><div class="player-actions"><button class="ghost" id="smoothButton" type="button">${smooth ? '切换流畅版' : '生成流畅版'}</button><a id="originalDownloadLink" href="/api/media/${id}/stream?download=true" download>${icon('download')} 下载原文件</a></div></div>
       <div class="player-error" id="playerError" role="status" hidden></div>
-    </div>`, true);
+    </div></div>`, true);
     const video = $('#player'), stage = $('#playerStage'), spinner = $('#playerSpinner');
     const buffer = $('#bufferStatus'), playToggle = $('#playToggle');
     const seek = $('#seekInput'), played = $('#seekPlayed'), buffered = $('#seekBuffer'), thumb = $('#seekThumb');
     const qualityButton = $('#qualityButton'), smoothButton = $('#smoothButton'), downloadButton = $('#downloadButton');
-    let scrubber;
-    const controls = attachPlayerControls({ shell: $('#playerShell'), stage, video, scrubbing: () => scrubber?.dragging() });
-    const storyboard = createSeekPreview(id, $('#seekPreview'));
+    let scrubber, queue;
+    const shell = $('#playerShell');
+    const controls = attachPlayerControls({ shell, stage, video, scrubbing: () => scrubber?.dragging(), interacting: () => queue?.isOpen() });
+    const locker = attachPlayerLock({ shell, button: $('#lockButton'), changed: () => controls.show(), notice: toast });
+    let storyboard = createSeekPreview(id, $('#seekPreview'));
     const preview = (at, active = false) => {
       const d = Number(video.duration) || Number(x.duration) || 0;
       const percentage = pct(at, d);
@@ -354,6 +375,45 @@
       }
       updateQuality();
     };
+    const changeEpisode = async target => {
+      const epoch = ++episodeRequest;
+      const resume = restorePosition !== null ? resumeOnReady : !video.paused;
+      try {
+        const [item, info] = await Promise.all([
+          api('/media/' + target),
+          api(`/media/${target}/playback`).catch(() => ({ original: { type: 'file', url: `/api/media/${target}/stream?quality=original` } })),
+        ]);
+        if (closed || epoch !== episodeRequest) return null;
+        try { localStorage.setItem('tvm-pos-' + id, String(restorePosition ?? video.currentTime)); } catch {}
+        clearInterval(smoothTimer); smoothTimer = null;
+        storyboard.destroy();
+        id = Number(target); x = item; playback = info;
+        shell.dataset.mediaId = String(id);
+        smooth = smoothReady(x); quality = 'original'; direct = false; firstLoad = true; saveAt = 0;
+        shell.querySelector('.player-title h3').textContent = x.file_name;
+        shell.querySelector('.player-title p').textContent = `${x.channel_title} · ${x.width} × ${x.height} · ${fmt(x.size)}`;
+        $('#totalTime').textContent = duration(x.duration);
+        video.poster = thumbUrl(x);
+        qualityButton.disabled = !smooth;
+        smoothButton.disabled = false; smoothButton.textContent = smooth ? '切换流畅版' : '生成流畅版';
+        $('#originalDownloadLink').href = `/api/media/${id}/stream?download=true`;
+        $('#playerError').hidden = true; $('#seekPreview').hidden = true;
+        storyboard = createSeekPreview(id, $('#seekPreview'));
+        buffered.style.width = '0%';
+        let saved = 0;
+        try { saved = Number(localStorage.getItem('tvm-pos-' + id) || 0); } catch {}
+        mount(saved > 5 && saved < Number(x.duration) - 10 ? saved : 0, resume);
+        preview(saved > 5 && saved < Number(x.duration) - 10 ? saved : 0);
+        controls.show();
+        return x;
+      } catch (error) {
+        if (!closed && epoch === episodeRequest) toast('切换失败，当前视频已保留：' + error.message);
+        return null;
+      }
+    };
+    shell.dataset.mediaId = String(id);
+    queue = attachPlayerPlaylist({ shell, current: x, contextIds, load: () => contextRows?.length ? Promise.resolve(contextRows) : api(`/media?channel_id=${Number(x.channel_id)}&sort=name`), select: changeEpisode,
+      changed: () => controls.show(), notice: toast, escape: esc, icon, duration });
     video.addEventListener('loadedmetadata', () => {
       if (closed) return;
       video.playbackRate = speed;
@@ -429,14 +489,16 @@
     qualityButton.onclick = () => setQuality(quality === 'original' ? 'smooth' : 'original');
     smoothButton.onclick = async () => {
       if (smooth) { setQuality('smooth'); return; }
+      const smoothId = id;
       smoothButton.disabled = true;
       try {
-        await api(`/media/${id}/smooth`, { method: 'POST' });
+        await api(`/media/${smoothId}/smooth`, { method: 'POST' });
+        if (closed || id !== smoothId) return;
         smoothButton.textContent = '生成中…';
         smoothTimer = setInterval(async () => {
           try {
-            const state = await api(`/media/${id}/smooth`);
-            if (closed) return;
+            const state = await api(`/media/${smoothId}/smooth`);
+            if (closed || id !== smoothId) return;
             smoothButton.textContent = `生成中 ${Math.round(state.progress)}%`;
             if (state.ready || state.status === 'failed') {
               clearInterval(smoothTimer); smoothButton.disabled = false;
@@ -444,14 +506,14 @@
               if (state.ready) { smooth = true; x.smooth_size = state.size; qualityButton.disabled = false; }
               else toast(state.error || '生成失败，请重试');
             }
-          } catch { clearInterval(smoothTimer); if (!closed) smoothButton.disabled = false; }
+          } catch { if (!closed && id === smoothId) { clearInterval(smoothTimer); smoothButton.disabled = false; } }
         }, 2000);
-      } catch (ex) { toast(ex.message); smoothButton.disabled = false; }
+      } catch (ex) { if (!closed && id === smoothId) { toast(ex.message); smoothButton.disabled = false; } }
     };
-    const backdrop = event => { if (event.target.id === 'modal') close(); };
+    const backdrop = event => { if (event.target.id === 'modal' && !locker.isLocked()) close(); };
     const close = () => {
       if (closed) return;
-      closed = true; sourceRun++; clearInterval(smoothTimer); controls.destroy(); scrubber.destroy(); storyboard.destroy();
+      closed = true; sourceRun++; episodeRequest++; clearInterval(smoothTimer); queue.destroy(); locker.destroy(); controls.destroy(); scrubber.destroy(); storyboard.destroy();
       try { localStorage.setItem('tvm-pos-' + id, String(restorePosition ?? video.currentTime)); } catch {}
       hls?.destroy(); hls = null; video.pause(); video.removeAttribute('src'); video.load();
       document.removeEventListener('keydown', keyHandler); $('#modal').removeEventListener('click', backdrop);
@@ -460,13 +522,19 @@
       closeModal();
     };
     const keyHandler = event => {
-      if (closed || event.target.matches('input,textarea,select')) return;
+      if (closed) return;
+      if (event.key === 'Escape') {
+        if (queue.isOpen()) queue.close();
+        else if (locker.isLocked()) void locker.setLocked(false);
+        else close();
+        return;
+      }
+      if (event.target.matches('input,textarea,select')) return;
       if (event.code === 'Space') { event.preventDefault(); toggle(); }
       else if (event.code === 'ArrowLeft') { event.preventDefault(); skip(-5); }
       else if (event.code === 'ArrowRight') { event.preventDefault(); skip(5); }
-      else if (event.key.toLowerCase() === 'f') $('#fullscreenButton').click();
+      else if (event.key.toLowerCase() === 'f' && !locker.isLocked()) $('#fullscreenButton').click();
       else if (event.key.toLowerCase() === 'm') video.muted = !video.muted;
-      else if (event.key === 'Escape') close();
     };
     window.pClosePlayer = close; $('#playerClose').onclick = close;
     $('#modal').addEventListener('click', backdrop); document.addEventListener('keydown', keyHandler);

@@ -43,11 +43,14 @@
     on(input, 'blur', () => { if (dragging) end(); });
     on(stage, 'pointerdown', event => {
       if (event.pointerType === 'mouse' || event.target.closest('button,a,input')) return;
-      gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, at: video.currentTime, active: false };
+      const viewport = stage.closest('.player-viewport');
+      const matrix = new DOMMatrixReadOnly(viewport ? getComputedStyle(viewport).transform : undefined);
+      gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, at: video.currentTime, active: false, matrix };
     });
     on(stage, 'pointermove', event => {
       if (!gesture || event.pointerId !== gesture.id) return;
-      const dx = event.clientX - gesture.x, dy = event.clientY - gesture.y;
+      const rx = event.clientX - gesture.x, ry = event.clientY - gesture.y;
+      const dx = rx * gesture.matrix.a + ry * gesture.matrix.b, dy = rx * gesture.matrix.c + ry * gesture.matrix.d;
       if (!gesture.active) {
         if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) { gesture = null; return; }
         if (Math.abs(dx) < 10) return;

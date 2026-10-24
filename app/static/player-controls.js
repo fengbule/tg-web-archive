@@ -1,7 +1,7 @@
 /* Tapping the picture only toggles controls; playback has its own button. */
 (function (scope) {
   'use strict';
-  scope.attachPlayerControls = function ({ shell, stage, video, scrubbing }) {
+  scope.attachPlayerControls = function ({ shell, stage, video, scrubbing, interacting }) {
     const listeners = [], pointers = new Set();
     let timer = null, hovering = false, keyboard = false;
     const controls = shell.querySelector('.player-controls');
@@ -9,7 +9,7 @@
       node.addEventListener(event, callback, options);
       listeners.push(() => node.removeEventListener(event, callback, options));
     };
-    const busy = () => video.paused || video.ended || pointers.size || hovering || scrubbing?.()
+    const busy = () => video.paused || video.ended || pointers.size || hovering || scrubbing?.() || interacting?.()
       || (keyboard && shell.contains(document.activeElement));
     const hide = () => {
       clearTimeout(timer);
