@@ -29,6 +29,10 @@ TEST_URL=http://127.0.0.1:8082 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs n
 
 新测试覆盖方向锁调用、API 与全屏不可用时的固定布局、旋转后的真实 CDP 触摸定位、输入法视口、锁定/全屏连续切集、音量倍速/暂停保持、自然排序、账号频道隔离、搜索与首末边界、媒体库顺序和稀疏接口结果、独立进度、失败与快速连续切集、异步锁定结束时清理。方向 API 用桩模拟，实际布局、全屏、视频播放与触摸操作在无头 Chromium 中执行；不能代替实体手机系统方向锁验证。另两组回归原画播放、音画共用播放器、切片预览、横滑、触控防误暂停、明暗主题及全屏。
 
+三组浏览器测试均通过，竖屏锁定和旋转后的选集截图已目检。应用版本 `1be402ae1a10` 已构建并运行于两机；VPS 8080、8084 HTTPS 中转、InstaBox 8081 的八个运行资源与仓库匹配，健康检查及原账号授权正常。通过 HTTPS 中转使用 VPS 的已有视频实测：轻触画面不暂停，底部暂停、原画、49 项选集、锁定中切换与切回、同一播放器和暂停/1.25 倍速保留通过，无页面脚本错误；VPS 两个入口的原文件 Range 附件通过。InstaBox 自身没有已归档媒体，其公网验证覆盖资源、健康和账号，不声称实测该实例的真实视频。
+
+重建应用后两机原账号、管理员/API 配置指纹、Session 授权指纹及除 IMAGE_TAG 外的环境配置一致；SQLite quick_check 为 ok。VPS 原 49 条媒体、49 条下载和 1 条发送记录的标识及稳定字段均保留，媒体文件路径和大小一致；InstaBox 原 1 个账号、0 条媒体/下载保持。后台更新单元均成功，Akile、Komari、1Panel 和 HTTPS 中转的容器/进程未变。备份目录内 `verification.json`、`records-verification.json` 记录主机与数据复核结果。
+
 ## 部署与管理
 
 本次升级前两机仓库为 `4ce869de129b`，应用版本为 `6fca686875ab`。目标与数据路径沿用原有独立实例：
@@ -86,6 +90,6 @@ docker compose -p telegram-video-manager restart nginx
 curl -fsS --retry 8 --retry-delay 2 --retry-all-errors http://127.0.0.1:8080/health
 ```
 
-InstaBox 同样切至升级前版本，使用 `IMAGE_TAG=rollback-player-lock-20261024` 和 `--no-build` 重建本项目 app，再重启本项目 nginx并检查 8081 健康。同步 `.env` 的 IMAGE_TAG，以免下一次操作误启动新镜像。回到新版时先切回 main，再按更新步骤执行。回滚只变更应用，不删除数据目录、下载记录、账号或 Session。
+InstaBox 同样切至升级前版本，使用 `IMAGE_TAG=rollback-player-lock-20261024` 和 `--no-build` 重建本项目 app，再重启本项目 nginx 并检查 8081 健康。同步 `.env` 的 IMAGE_TAG，以免下一次操作误启动新镜像。回到新版时先切回 main，再按更新步骤执行。回滚只变更应用，不删除数据目录、下载记录、账号或 Session。
 
 凭据仍只保存在原受保护本地文件和服务器 `.env`/数据目录；不打印、不修改密码，不提交真实配置、数据库、Session、日志或验证 Cookie。
