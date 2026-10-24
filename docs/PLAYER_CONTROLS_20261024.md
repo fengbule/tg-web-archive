@@ -24,6 +24,8 @@ TEST_URL=http://127.0.0.1:8082 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs \
 
 前者覆盖鼠标与真实 CDP 触摸、暂停状态保持、320/390px 明暗主题、按钮不覆盖画面、显隐不跳动、自动隐藏、长按进度条、键盘聚焦、自定义全屏及关闭重开。后者回归原画 HLS、渐进起播、拖动预览、横滑与进度条触控、画质切换和音视频共用播放器。测试使用无头 Chromium；并非实体手机 Safari 的实测结论。
 
+两组浏览器测试已通过。业务版本 `6fca686` 已部署至两台机器；VPS 原入口、8084 HTTPS 中转、InstaBox 8081 入口的四个播放器资源均与仓库一致，健康接口及原账号授权正常；8084 实际媒体轻触/暂停和原画、VPS 两入口原文件 Range 附件均通过。InstaBox 自身没有已归档媒体，因此其公网检查覆盖资源与账号，不声称验证了该实例的真实视频播放。
+
 ## 双实例更新与回滚
 
 现有部署位置保持不变：VPS `/opt/telegram-video-manager`（Compose 项目 `telegram-video-manager`），InstaBox `/data/workspace/tg-web-archive`（项目 `tg-web-archive`）。8084 HTTPS 中转继续指向 VPS，更新 VPS 应用即可同步提供新页面。
@@ -38,7 +40,7 @@ git pull --ff-only
 docker compose -p telegram-video-manager build app
 docker compose -p telegram-video-manager up -d --no-deps --force-recreate --wait --wait-timeout 180 app
 docker compose -p telegram-video-manager restart nginx
-curl -fsS http://127.0.0.1:8080/health
+curl -fsS --retry 8 --retry-delay 2 --retry-all-errors http://127.0.0.1:8080/health
 ```
 
 InstaBox 按原部署入口更新：
@@ -47,7 +49,7 @@ InstaBox 按原部署入口更新：
 cd /data/workspace/tg-web-archive
 git pull --ff-only
 bash scripts/instabox.sh deploy
-curl -fsS http://127.0.0.1:8081/health
+curl -fsS --retry 8 --retry-delay 2 --retry-all-errors http://127.0.0.1:8081/health
 ```
 
 也可指定 `IMAGE_TAG=$(git rev-parse --short=12 HEAD)`，使用独立 Compose 文件只构建/替换 app，然后重启该项目的 nginx，避免拉取和变更其他镜像。保留 `.env` 的原值，只同步 `IMAGE_TAG`。
@@ -60,5 +62,7 @@ curl -fsS http://127.0.0.1:8081/health
 - InstaBox：`/data/workspace/tg-web-archive/backups/tg-web-archive-player-controls-20261024T015604Z`
 
 其中 `.env` 权限为 600；包含 SQLite 一致性备份、Session 备份与不含秘密值的镜像/服务清单，不包含大型视频文件。
+
+本次 scoped 更新末尾曾在 Nginx 刚重启时立即请求健康接口，收到短暂连接重置（curl 56）；应用和代理随后健康，已单独完成就绪与运行资源核验，结果保存在备份目录 `verification.json`。上方管理命令使用有上限的重试，避免将代理启动瞬间误报为更新失败。两机监控、非本项目容器的 ID/启动时间与升级前一致。
 
 保留原账号、密码、Session、正式媒体、下载记录和 `.part`；不运行 `down -v`、初始化、账号退出或删除操作。Akile、Komari、1Panel 和外部保活不属于本次部署范围。
