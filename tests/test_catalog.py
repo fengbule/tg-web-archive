@@ -19,7 +19,7 @@ def test_video_filter_pagination_verified_local_and_job_states(tmp_path):
         async def iter_messages(self,entity,**kwargs):
             assert kwargs['filter'] is InputMessagesFilterVideo
             for mid in [9,8]:
-                yield SimpleNamespace(id=mid,video=SimpleNamespace(attributes=[],size=123,thumbs=[object()]),message='',date=datetime.now(timezone.utc))
+                yield SimpleNamespace(id=mid,grouped_id=900 if mid==8 else None,video=SimpleNamespace(attributes=[],size=123,thumbs=[] if mid==8 else [object()]),message='',date=datetime.now(timezone.utc))
         async def download_media(self,*args,**kwargs):raise AssertionError('local cover should not call Telegram')
     async def get_client():return Client()
     svc.get_client=get_client
@@ -28,6 +28,7 @@ def test_video_filter_pagination_verified_local_and_job_states(tmp_path):
         assert result['account_id']==1
         a,b=result['items'];assert a['downloaded'] and a['local_media_id'] and a['local_thumbnail']
         assert b['download_status']=='downloading' and b['download_progress']==50 and not b['downloaded']
+        assert b['has_thumbnail'],'an album poster must be requested even without a document thumbnail'
         assert asyncio.run(svc.thumbnail(10,9))==thumb
         result=asyncio.run(svc.videos(10,limit=24));assert result['next_offset_id'] is None
         source.unlink();assert not asyncio.run(svc.videos(10))['items'][0]['downloaded']

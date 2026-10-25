@@ -24,7 +24,7 @@
     if (hour < 18) return '下午好';
     return '晚上好';
   };
-  const thumbUrl = (x) => `/api/media/${x.id}/thumbnail?v=3`;
+  const thumbUrl = (x) => `/api/media/${x.id}/thumbnail?v=4`;
   const smoothReady = (x) => x && x.smooth_status === 'ready' && x.smooth_path;
   const smoothBusy = (x) => x && (x.smooth_status === 'queued' || x.smooth_status === 'processing');
   let libraryPlayback = [];

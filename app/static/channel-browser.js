@@ -102,7 +102,7 @@
     if (v.items.has(x.message_id)) return;
     v.items.set(x.message_id,x);
     const card = document.createElement('article');card.className='card catalog-card';card.dataset.messageId=x.message_id;
-    const src = `/api/channels/${x.channel_id}/videos/${x.message_id}/thumbnail?account_id=${v.account}&v=3`;
+    const src = `/api/channels/${x.channel_id}/videos/${x.message_id}/thumbnail?account_id=${v.account}&v=4`;
     card.innerHTML = `<div class="catalog-cover" data-cover="loading"><div class="catalog-cover-placeholder"><svg><use href="#i-film"/></svg><small>${x.has_thumbnail || x.local_thumbnail ? '封面加载中' : '来源未提供封面'}</small></div><img alt="视频封面" decoding="async" data-src="${src}"><button class="catalog-cover-retry ghost" type="button">重试封面</button><span class="catalog-status"></span><span class="catalog-duration">${times(x.duration)}</span>${videoFavorites.button({...x,account_id:v.account})}</div>
       <div class="catalog-body"><label><input type="checkbox" aria-label="选择视频"><b title="${esc(mediaPresentation.title(x))}">${esc(mediaPresentation.title(x))}</b></label><p class="muted">${fmt(x.size)} · ${x.width || '—'} × ${x.height || '—'} · ${date(x.date).split(' ')[0]}</p>${mediaPresentation.details(x)}<div class="catalog-card-actions"><small class="catalog-state"></small><button class="catalog-download" type="button"></button></div></div>`;
     v.grid.append(card);

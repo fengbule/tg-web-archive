@@ -83,8 +83,8 @@ async def security(request:Request,call_next):
         log.exception('请求处理失败 path=%s',request.url.path); return JSONResponse({'detail':'操作失败，请稍后重试'},status_code=500)
     if request.url.path.startswith('/api/media/') and request.url.path.endswith('/stream') and response.status_code in (200,206):
         response.headers['Cache-Control']='private, max-age=3600'
-    elif request.url.path.startswith('/api/') and request.url.path.endswith('/thumbnail') and response.status_code==200:
-        response.headers['Cache-Control']='private, max-age='+('60' if response.headers.get('X-Thumbnail-Source')=='local-frame' else '3600')
+    elif request.url.path.startswith('/api/') and request.url.path.endswith('/thumbnail') and response.status_code in (200,304):
+        response.headers['Cache-Control']='private, no-cache'
     else: response.headers['Cache-Control']='no-store' if request.url.path.startswith('/api/') else 'no-cache'
     return response
 
@@ -271,12 +271,12 @@ async def videos(channel_id:int,offset_id:int=0,limit:int=30):
     favorites.mark(result['items'],result['account_id'])
     return result
 @app.get('/api/channels/{channel_id}/videos/{message_id}/thumbnail')
-async def telegram_thumbnail(channel_id:int,message_id:int,account_id:int|None=None):
+async def telegram_thumbnail(channel_id:int,message_id:int,request:Request,account_id:int|None=None):
     service=qr_service(account_id if account_id is not None else tg.active_id)
     try: p=await service.thumbnail(channel_id,message_id)
     except TimeoutError: raise HTTPException(504,'封面读取超时，请点击重试') from None
     if not p: raise HTTPException(404,'该视频没有可用封面')
-    return FileResponse(p,media_type='image/jpeg',headers={'Cache-Control':'private, max-age=86400','X-Thumbnail-Source':service.thumbnail_origin(p)})
+    return thumbnail_response(p,request)
 
 @app.get('/api/dialogs')
 async def dialogs(q:str='',limit:int=100):
@@ -551,13 +551,22 @@ def original_hls(id:int,name:str):
         return Response(media_type=mime,headers=headers)
     return FileResponse(p,media_type=mime,headers=headers)
 @app.get('/api/media/{id}/thumbnail')
-async def thumbnail(id:int):
+async def thumbnail(id:int,request:Request):
     x,_=media_row(id)
     try: p=await tg.service(x['account_id']).thumbnail(x['channel_id'],x['message_id'])
     except Exception: p=Path(x['thumb_path']) if x['thumb_path'] else None
     p=Path(p).resolve() if p else None
     if not p or ROOT not in p.parents or not p.is_file(): raise HTTPException(404,'无缩略图')
-    return FileResponse(p,media_type='image/jpeg',headers={'X-Thumbnail-Source':TelegramAccountService.thumbnail_origin(p)})
+    return thumbnail_response(p,request)
+
+def thumbnail_response(path,request):
+    path=Path(path).resolve()
+    if ROOT not in path.parents or not path.is_file():raise HTTPException(404,'无缩略图')
+    stat=path.stat();etag=f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+    headers={'X-Thumbnail-Source':TelegramAccountService.thumbnail_origin(path),'ETag':etag,'Vary':'Cookie','Cache-Control':'private, no-cache'}
+    matches=[value.strip().removeprefix('W/') for value in request.headers.get('if-none-match','').split(',')]
+    if etag in matches or '*' in matches:return Response(status_code=304,headers=headers)
+    return FileResponse(path,media_type='image/jpeg',headers=headers,stat_result=stat)
 @app.get('/api/media/{id}/stream')
 def stream(id:int,request:Request,download:bool=False,quality:str='original'):
     x,p=media_row(id); filename=x['file_name']; mime=x['mime']

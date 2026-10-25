@@ -1,4 +1,4 @@
-import asyncio, logging, time, uuid, os, re
+import asyncio, logging, time, uuid, os, re, json
 from pathlib import Path
 from collections import OrderedDict
 from telethon import TelegramClient
@@ -125,7 +125,7 @@ class TelegramAccountService:
             name=getattr(fa,'file_name',None) or f'video_{m.id}.mp4'
             out.append({'message_id':m.id,'channel_id':int(channel_id),'channel_title':getattr(entity,'title',''),'file_name':name,
               'caption':m.message or '','date':m.date.isoformat(),'size':doc.size or 0,'duration':getattr(va,'duration',0) or 0,
-              'width':getattr(va,'w',0) or 0,'height':getattr(va,'h',0) or 0,'has_thumbnail':bool(getattr(doc,'thumbs',None) or getattr(getattr(getattr(m,'media',None),'video_cover',None),'sizes',None))})
+              'width':getattr(va,'w',0) or 0,'height':getattr(va,'h',0) or 0,'has_thumbnail':bool(getattr(doc,'thumbs',None) or getattr(getattr(getattr(m,'media',None),'video_cover',None),'sizes',None) or getattr(m,'grouped_id',None))})
         ids=[x['message_id'] for x in out]
         existing={};jobs={}
         if ids:
@@ -147,12 +147,21 @@ class TelegramAccountService:
             self.db.execute('UPDATE media SET thumb_path=? WHERE account_id=? AND channel_id=? AND message_id=? AND COALESCE(thumb_path,\'\')!=?',
                 (str(path),self.account_id,int(channel_id),int(message_id),str(path)))
         return path
+    async def _album_photo(self,client,channel_id,msg):
+        group=getattr(msg,'grouped_id',None)
+        if not group:return None
+        # Telegram albums contain at most ten items. Numeric neighbours alone
+        # are not evidence: require the same album ID and the same peer query.
+        entity=await client.get_entity(int(channel_id))
+        nearby=await client.get_messages(entity,ids=list(range(max(1,msg.id-10),msg.id+11)))
+        photos=[m for m in nearby if m and getattr(m,'grouped_id',None)==group and getattr(m,'photo',None)]
+        return min(photos,key=lambda m:m.id) if photos else None
     async def thumbnail(self,channel_id,message_id,refresh=False):
         local=self.db.one('SELECT thumb_path FROM media WHERE account_id=? AND channel_id=? AND message_id=?',(self.account_id,int(channel_id),int(message_id)))
         fallback=Path(local['thumb_path']) if local and local['thumb_path'] else None
         if fallback and not fallback.is_file(): fallback=None
-        # A new namespace prevents an old document thumbnail from masking a custom cover.
-        target=self.thumb_dir/'source-v2'/str(self.account_id)/str(channel_id)/f'{message_id}.jpg'
+        # Old caches contain document thumbnails, which must not hide album posters.
+        target=self.thumb_dir/'source-v3'/str(self.account_id)/str(channel_id)/f'{message_id}.jpg'
         cached=target.is_file() and target.stat().st_size
         if cached and not refresh and time.time()-target.stat().st_mtime<86400:
             return self._save_local_cover(channel_id,message_id,target)
@@ -173,8 +182,16 @@ class TelegramAccountService:
                             entity=await c.get_entity(int(channel_id)); msg=await c.get_messages(entity,ids=int(message_id))
                         if msg and msg.video:
                             cover=getattr(getattr(msg,'media',None),'video_cover',None)
-                            candidates=[(cover,getattr(cover,'sizes',None),'telegram-custom'),(msg.video,getattr(msg.video,'thumbs',None),'telegram-thumbnail')]
-                            for source,sizes,origin in candidates:
+                            album=None
+                            if getattr(msg,'grouped_id',None):
+                                try:album=await self._album_photo(c,channel_id,msg)
+                                except asyncio.CancelledError:raise
+                                except Exception:pass
+                            photo=getattr(album,'photo',None)
+                            candidates=[(cover,getattr(cover,'sizes',None),'telegram-custom',message_id),
+                                (photo,getattr(photo,'sizes',None),'telegram-album',getattr(album,'id',message_id)),
+                                (msg.video,getattr(msg.video,'thumbs',None),'telegram-thumbnail',message_id)]
+                            for source,sizes,origin,source_message_id in candidates:
                                 static=[s for s in (sizes or []) if isinstance(s,(PhotoSize,PhotoCachedSize,PhotoStrippedSize,PhotoSizeProgressive))]
                                 if not static: continue
                                 # thumb=-1 may select an animated MP4. Explicitly request the largest still image.
@@ -186,6 +203,8 @@ class TelegramAccountService:
                                     if p.is_file() and p.stat().st_size:
                                         await asyncio.to_thread(self._validate_cover,p)
                                         os.replace(p,target);target.with_suffix('.source').write_text(origin,encoding='ascii')
+                                        target.with_suffix('.json').write_text(json.dumps({'origin':origin,'source_message_id':source_message_id,
+                                            'grouped_id':getattr(msg,'grouped_id',None)}),encoding='utf-8')
                                         self.thumbnail_backoff.pop(key,None)
                                         return self._save_local_cover(channel_id,message_id,target)
                                 except asyncio.CancelledError: raise
@@ -213,7 +232,7 @@ class TelegramAccountService:
         marker=Path(path).with_suffix('.source')
         if marker.is_file():
             value=marker.read_text(encoding='ascii')
-            if value in ('telegram-custom','telegram-thumbnail'): return value
+            if value in ('telegram-custom','telegram-album','telegram-thumbnail'): return value
         return 'local-frame'
     async def _entity(self,peer_id):
         c=await self.get_client()

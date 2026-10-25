@@ -35,7 +35,7 @@ try{
  await page.evaluate(()=>go('library'));await page.locator('#refreshCoversButton').click();
  await page.waitForFunction(()=>document.querySelector('#refreshCoversButton')?.disabled===false);
  const sync=await page.evaluate(()=>api('/media/covers/refresh'));assert.equal(sync.status,'completed');assert.equal(sync.original,1);assert.equal(sync.updated,1);
- const before=await page.evaluate(()=>api('/media/1'));assert.ok(before.thumb_path.includes('/source-v2/'),'downloaded media pointer now uses the TG image');
+ const before=await page.evaluate(()=>api('/media/1'));assert.ok(before.thumb_path.includes('/source-v3/'),'downloaded media pointer now uses the TG image');
  await page.waitForFunction(async()=>{const p=await api('/media/1/playback');return p.status==='ready'});
  const cdp=await ctx.newCDPSession(page);await cdp.send('Network.enable');await cdp.send('Network.setCacheDisabled',{cacheDisabled:true});
  await cdp.send('Network.emulateNetworkConditions',{offline:false,latency:100,downloadThroughput:10000,uploadThroughput:100000});

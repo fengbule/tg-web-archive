@@ -48,7 +48,7 @@
   function card(item) {
     const identity = key(item);
     if (item.downloaded) return `<div class="favorite-entry" data-favorite-entry="${identity}">${window.nebulaMediaCard({ ...item, id: item.media_id }, { select: false })}</div>`;
-    const cover = `/api/channels/${item.channel_id}/videos/${item.message_id}/thumbnail?account_id=${item.account_id}&v=3`;
+    const cover = `/api/channels/${item.channel_id}/videos/${item.message_id}/thumbnail?account_id=${item.account_id}&v=4`;
     const labels = { queued: '排队中', downloading: '下载中', retrying: '等待续传', pausing: '暂停中', paused: '继续下载', failed: '重试下载', cancelled: '重新下载' };
     const busy = ['queued', 'downloading', 'retrying', 'pausing'].includes(item.download_status);
     return `<article class="card media-card-v2 favorite-entry" data-favorite-entry="${identity}">

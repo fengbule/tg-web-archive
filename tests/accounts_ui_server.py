@@ -28,7 +28,7 @@ states={}; failures=set(); cover_failures=set()
 def video_message(mid):
     caption=(f'山海之间 · 第 {mid} 集：把日常过成远方\n完整 TG 说明：沿海公路与午后的海风，保留原始文件名用于另存。' if mid in (60,58) else '隔离测试素材 · 横竖屏均可挑选')
     custom=SimpleNamespace(id=mid,sizes=[PhotoSize('x',960,540,1000)]) if mid in (60,58) else None
-    return SimpleNamespace(id=mid,message=caption,media=SimpleNamespace(video_cover=custom),date=datetime.now(timezone.utc),out=False,reply_to_msg_id=None,edit_date=None,video=SimpleNamespace(
+    return SimpleNamespace(id=mid,grouped_id=900 if mid==59 else None,message=caption,media=SimpleNamespace(video_cover=custom),date=datetime.now(timezone.utc),out=False,reply_to_msg_id=None,edit_date=None,video=SimpleNamespace(
         id=mid,attributes=[DocumentAttributeVideo(duration=24,w=640,h=360),DocumentAttributeFilename(file_name=f'灵感片段 {mid:02d} · 原画.mp4')],
         size=media.stat().st_size,thumbs=[] if mid==56 else [PhotoSize('m',480,270,1000)]))
 
@@ -64,13 +64,17 @@ class FakeClient:
         entity=Channel(id=1,title='创作收藏 · Studio',photo=ChatPhotoEmpty(),date=datetime.now(timezone.utc))
         yield SimpleNamespace(entity=entity,name=entity.title,id=-1000000000001,unread_count=0,pinned=False,folder_id=None,message=None,date=entity.date)
     async def get_entity(self,*args): return SimpleNamespace(title='创作收藏 · Studio')
-    async def get_messages(self,entity,ids): return video_message(ids)
+    async def get_messages(self,entity,ids):
+        def message(mid):
+            if mid==61:return SimpleNamespace(id=61,grouped_id=900,photo=SimpleNamespace(id=61,sizes=[PhotoSize('x',1280,720,1000)]),video=None)
+            return video_message(mid) if 1<=mid<=60 else None
+        return [message(mid) for mid in ids] if isinstance(ids,list) else message(ids)
     async def iter_messages(self,entity,limit=24,offset_id=0,**kwargs):
         for mid in list(range(min(offset_id-1,60) if offset_id else 60,0,-1))[:limit]: yield video_message(mid)
     async def download_media(self,doc,file,thumb=None):
         if doc.id==57 and doc.id not in cover_failures:
             cover_failures.add(doc.id);raise ConnectionError('Fixture cover temporarily unavailable')
-        Path(file).write_bytes((tg_cover if hasattr(doc,'sizes') else cover).read_bytes());return file
+        Path(file).write_bytes((tg_album if doc.id==61 else tg_cover if hasattr(doc,'sizes') else cover).read_bytes());return file
     async def iter_download(self,doc,offset=0,chunk_size=512*1024,**kwargs):
         data=media.read_bytes()
         for start in range(offset,len(data),chunk_size):
@@ -107,6 +111,13 @@ image=Image.new('RGB',(960,540),'#163849');draw=ImageDraw.Draw(image)
 draw.rectangle((0,250,960,540),fill='#377d95');draw.polygon([(0,360),(500,270),(960,440),(960,540),(0,540)],fill='#74b7bb')
 draw.ellipse((670,55,790,175),fill='#f6d6a0');draw.text((54,60),'ORIGINAL TG COVER',fill='white',font_size=38)
 image.save(tg_cover,quality=95)
+tg_album=ROOT/'thumbnails'/'album-poster.jpg'
+Image.new('RGB',(1280,720),'#9c632e').save(tg_album,quality=95)
+
+@app.post('/__test__/album-cover-next')
+def album_cover_next():
+    Image.new('RGB',(1280,720),'#327f68').save(tg_album,quality=95)
+    return {'ok':True}
 for mid,status in [(59,'paused'),(55,'failed')]:
     db.execute('INSERT INTO downloads(channel_id,message_id,channel_title,file_name,total_bytes,status,created_at,updated_at) VALUES(1,?,?,?,?,?,?,?)',
         (mid,'创作收藏 · Studio',f'灵感片段 {mid:02d} · 原画.mp4',media.stat().st_size,status,now(),now()))
