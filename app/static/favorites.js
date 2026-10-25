@@ -54,7 +54,7 @@
     return `<article class="card media-card-v2 favorite-entry" data-favorite-entry="${identity}">
       <div class="media-poster"><div class="poster-fallback">${icon('film')}</div>${cover ? `<img loading="lazy" src="${cover}" alt="" onerror="this.remove()">` : ''}<div class="poster-shade"></div><div class="media-flags"><span class="flag original">待下载</span></div><span class="poster-duration">${Math.floor(item.duration / 60)}:${String(Math.floor(item.duration % 60)).padStart(2, '0')}</span></div>
       <div class="media-card-body"><div class="media-name" title="${esc(item.file_name)}">${esc(item.file_name)}</div><div class="media-sub"><span>${esc(item.channel_title || '未知来源')}</span><span class="dot"></span><span>${fmt(item.size)}</span></div><p class="favorite-account">${esc(item.account_label || '原账号已移除')} · ${date(item.created_at)}</p>
-      <div class="media-actions"><button type="button" data-favorite-download="${identity}" ${busy ? 'disabled' : ''}>${icon('download')} ${labels[item.download_status] || '下载视频'}</button>${button({ ...item, id: undefined })}</div></div></article>`;
+      <div class="media-actions"><button type="button" data-favorite-download="${identity}" ${busy ? 'disabled' : ''}>${icon('download')} ${labels[item.download_status] || '下载到服务器'}</button>${button({ ...item, id: undefined })}</div></div></article>`;
   }
   async function load(current, append = false) {
     if (!valid(current) || (append && current.loading)) return;

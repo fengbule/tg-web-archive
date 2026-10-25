@@ -32,7 +32,7 @@ try {
   await page.locator('#queueBtn').click();
   await page.waitForFunction(()=>document.querySelector('[data-message-id="58"]')?.dataset.status==='queued');
   assert.equal(await page.locator('#videoList').count(),1,'queue stays in catalogue');
-  assert.equal(await page.locator('#queueBtn').textContent(),'下载选中 (0)');
+  assert.equal(await page.locator('#queueBtn').textContent(),'下载到服务器 (0)');
   await page.waitForFunction(()=>['58','59'].every(id=>document.querySelector(`[data-message-id="${id}"]`)?.dataset.status==='completed'),{},{timeout:30000});
   await card(58).locator('.catalog-download').click();await page.locator('#player').waitFor();await page.locator('#playerClose').click();
   for(const theme of ['light','dark']) {

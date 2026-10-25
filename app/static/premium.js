@@ -62,7 +62,7 @@
         <div class="media-actions">
           <button type="button" onclick="play(${x.id})">${icon('play')} 播放原画</button>
           ${videoFavorites.button(x)}
-          <button type="button" class="icon-action" onclick="pDownload(${x.id})" title="下载原画">${icon('download')}</button>
+          <button type="button" class="icon-action" onclick="pDownload(${x.id})" title="另存原画到手机 / 电脑" aria-label="另存原画到手机 / 电脑">${icon('download')}</button>
           <button type="button" class="icon-action" onclick="pMediaMenu(${x.id})" title="更多操作">${icon('chevron')}</button>
         </div>
       </div>
@@ -126,7 +126,7 @@
     libraryPlayback = [];
     selectedMedia.clear();
     content.innerHTML = `
-      <div class="library-heading"><div><span class="eyebrow">YOUR COLLECTION</span><h3>你的媒体空间</h3><p>原画播放，随时继续。轻松保存到手机与电脑。</p></div><span class="library-count" id="libraryCount"></span></div>
+      <div class="library-heading"><div><span class="eyebrow">SERVER MEDIA</span><h3>服务器媒体库</h3><p>视频已保存在服务器。原画播放，或另存到手机 / 电脑。</p></div><span class="library-count" id="libraryCount"></span></div>
       <div class="toolbar">
         <input id="mediaSearch" placeholder="搜索视频名称或频道" onkeydown="if(event.key==='Enter')loadMedia()">
         <select id="mediaSort" onchange="loadMedia()">
@@ -134,7 +134,7 @@
         </select>
         <button class="ghost p-toolbar-search" onclick="loadMedia()">${icon('search')} 搜索</button>
         <label><input id="selectAllMedia" type="checkbox" onchange="toggleAllMedia(this.checked)"> 全选</label>
-        <button id="batchDownloadBtn" class="ghost" onclick="pDownloadSelected()" disabled>${icon('download')} 批量下载 (<span>0</span>)</button>
+        <button id="batchDownloadBtn" class="ghost" onclick="pDownloadSelected()" disabled>${icon('download')} 另存到本机 (<span>0</span>)</button>
         <button id="deleteSelectedBtn" class="danger" onclick="deleteSelectedMedia()" disabled>${icon('x')} 删除选中 (<span>0</span>)</button>
         <button class="ghost p-clear-btn" onclick="clearAllMedia()" title="清空媒体库">${icon('refresh')} 清空</button>
       </div>
@@ -203,7 +203,7 @@
       <p class="muted" style="font-size:12px">${esc(x.channel_title)} · ${fmt(x.size)} · ${x.width}×${x.height} · ${duration(x.duration)}</p>
       <div class="actions" style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:18px">
         <button onclick="closeModal();play(${id},'original')">${icon('play')} 原画播放</button>
-        <button class="ghost" onclick="pDownload(${id})">${icon('download')} 下载原画</button>
+        <button class="ghost" onclick="pDownload(${id})">${icon('download')} 另存原画到手机 / 电脑</button>
         ${ready ? `<button class="ghost" onclick="closeModal();play(${id},'smooth')">${icon('zap')} 播放 480P 流畅版</button><button class="ghost" onclick="pDownload(${id},'smooth')">${icon('download')} 下载 480P</button>` : busy ? `<button class="ghost" disabled>${icon('zap')} 流畅版生成中 ${Math.round(x.smooth_progress || 0)}%</button>` : `<button class="ghost" onclick="pStartSmooth(${id},this)">${icon('zap')} 生成 480P 流畅版</button>`}
         <button class="ghost" onclick="closeModal();sendMediaToSaved(${id})">${icon('star')} 上传收藏夹</button>
         <button class="ghost" onclick="closeModal();renameMedia(${id},'${encodeURIComponent(x.file_name)}')">${icon('film')} 重命名</button>
@@ -578,7 +578,7 @@
           </div>
         </div>`;
       };
-      content.innerHTML = `<div class="notice"><b>双并发 · 断点续传</b><span>暂停、断网或服务重启都会保留临时文件；点击“继续”从现有进度恢复，不重复下载。</span></div>
+      content.innerHTML = `<div class="notice"><b>下载到服务器 · 支持暂停与续传</b><span>关闭手机或电脑上的网页，服务器仍会继续下载。完成后到“服务器媒体库”播放；如需保存到自己的设备，再点“另存到本机”。</span></div>
         ${active.length ? `<div class="section-head"><div class="section-title">${icon('download')} 进行中 · ${active.length}</div></div><div class="dl-list">${active.map(row).join('')}</div>` : ''}
         ${done.length ? `<div class="section-head" style="margin-top:24px"><div class="section-title">${icon('clock')} 历史记录</div></div><div class="dl-list">${done.map(row).join('')}</div>` : ''}
         ${!xs.length ? `<div class="empty-state"><h3>还没有下载任务</h3><p>去频道选择视频，归档到你的服务器。</p><button onclick="go('channels')">浏览频道</button></div>` : ''}`;
@@ -821,13 +821,15 @@
   function pCloseNav() {
     document.querySelector('aside')?.classList.remove('open');
     $('#navBackdrop')?.classList.remove('show');
+    $('#menu')?.setAttribute('aria-expanded', 'false');
   }
   const menu = document.getElementById('menu');
   if (menu) {
-    menu.addEventListener('click', () => {
+    menu.onclick = () => {
       const open = document.querySelector('aside').classList.toggle('open');
       $('#navBackdrop').classList.toggle('show', open);
-    });
+      menu.setAttribute('aria-expanded', String(open));
+    };
   }
   const backdrop = document.getElementById('navBackdrop');
   if (backdrop) backdrop.addEventListener('click', pCloseNav);

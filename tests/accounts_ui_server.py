@@ -11,7 +11,7 @@ import bcrypt
 import uvicorn
 from cryptography.fernet import Fernet
 from telethon.errors import SessionPasswordNeededError
-from telethon.tl.types import Channel,ChatPhotoEmpty,DocumentAttributeVideo,DocumentAttributeFilename
+from telethon.tl.types import Channel,ChatPhotoEmpty,DocumentAttributeVideo,DocumentAttributeFilename,User
 
 os.environ['DATA_ROOT']=tempfile.mkdtemp(prefix='tvm-accounts-ui-')
 os.environ['SESSION_SECRET']='disposable-browser-fixture-'*4
@@ -26,7 +26,7 @@ import app.telegram_service as telegram
 states={}; failures=set(); cover_failures=set()
 
 def video_message(mid):
-    return SimpleNamespace(id=mid,message='隔离测试素材 · 横竖屏均可挑选',date=datetime.now(timezone.utc),video=SimpleNamespace(
+    return SimpleNamespace(id=mid,message='隔离测试素材 · 横竖屏均可挑选',date=datetime.now(timezone.utc),out=False,reply_to_msg_id=None,edit_date=None,video=SimpleNamespace(
         id=mid,attributes=[DocumentAttributeVideo(duration=24,w=640,h=360),DocumentAttributeFilename(file_name=f'灵感片段 {mid:02d} · 原画.mp4')],
         size=media.stat().st_size,thumbs=[] if mid==56 else [object()]))
 
@@ -43,7 +43,7 @@ class FakeClient:
     async def connect(self): self.connected=True; self.path.with_suffix('.session').touch()
     async def disconnect(self): self.connected=False
     async def is_user_authorized(self): return states.get(str(self.path),False)
-    async def get_me(self): return SimpleNamespace(first_name='测试',last_name='账号',phone='1234567890')
+    async def get_me(self): return User(id=999,first_name='测试',last_name='账号',phone='1234567890')
     async def qr_login(self): return FakeQR()
     async def send_code_request(self,phone):
         assert phone == '+1234567890'
@@ -60,7 +60,7 @@ class FakeClient:
         return True
     async def iter_dialogs(self,*args,**kwargs):
         entity=Channel(id=1,title='创作收藏 · Studio',photo=ChatPhotoEmpty(),date=datetime.now(timezone.utc))
-        yield SimpleNamespace(entity=entity,name=entity.title)
+        yield SimpleNamespace(entity=entity,name=entity.title,id=-1000000000001,unread_count=0,pinned=False,folder_id=None,message=None,date=entity.date)
     async def get_entity(self,*args): return SimpleNamespace(title='创作收藏 · Studio')
     async def get_messages(self,entity,ids): return video_message(ids)
     async def iter_messages(self,entity,limit=24,offset_id=0,**kwargs):

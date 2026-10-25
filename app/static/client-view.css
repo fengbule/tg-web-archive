@@ -1,0 +1,168 @@
+/* Client shell: explicit layouts are independent of viewport breakpoints.
+   Player/fullscreen/orientation styles deliberately continue to use real dimensions. */
+:root{--client-accent:#79b7ff;--client-wash:#79b7ff12;--client-header:76px}
+html[data-theme=light]{--client-accent:#2877bb;--client-wash:#3389ca0e}
+#app>aside{overflow-y:auto;overscroll-behavior:contain}
+.view-switch{position:relative;flex:none}
+#viewModeButton{height:44px;gap:7px;white-space:nowrap;padding:8px 10px;font-size:12px;border-radius:12px}
+#viewModeButton>svg{width:18px;height:18px}#viewModeButton .view-chevron{width:13px}
+.view-panel{position:absolute;right:0;top:calc(100% + 10px);width:min(280px,calc(100vw - 24px));padding:8px;border:1px solid var(--line-strong);border-radius:17px;background:var(--surface-solid);box-shadow:var(--shadow);z-index:51}
+.view-panel-heading{padding:11px 12px;font-size:13px;font-weight:650}.view-panel-heading small{display:block;margin-top:5px;font-size:11px;font-weight:400;color:var(--muted)}
+.view-panel>button{display:block;text-align:left;width:100%;padding:12px;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--text);box-shadow:none;min-height:58px}
+.view-panel>button small{display:block;color:var(--muted);font-size:11px;margin-top:4px}.view-panel>button b{font-size:13px;font-weight:600}.view-panel>button:hover{background:var(--client-wash)}
+.view-panel>button[aria-pressed=true]{background:var(--client-wash);border-color:var(--client-accent)}
+.view-panel>button[aria-pressed=true] b::after{content:'✓';float:right;color:var(--client-accent)}
+@media(max-width:700px){.view-panel{right:-44px}}
+html[data-layout] #app header{height:var(--client-header);gap:12px;padding:0 22px}
+html[data-layout] .header-actions{gap:8px;min-width:0}
+html[data-layout] #content{padding:24px 24px 46px;min-width:0}
+html[data-layout] .page-head{min-width:0;flex:1}
+html[data-layout] #pageTitle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+html[data-layout] #subtitle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+html[data-layout] #diskBadge{display:none}
+html[data-layout=desktop] #app>aside{width:224px;transform:none;box-shadow:none;padding:22px 12px 18px}
+html[data-layout=desktop] #app>main{margin-left:224px}
+html[data-layout=desktop] #loadingBar{left:224px}
+html[data-layout=desktop] #menu,html[data-layout=desktop] .mobile-nav{display:none}
+html[data-layout=desktop] .account-switch{display:flex}
+html[data-layout=desktop] #app>aside nav a{min-height:44px;font-size:13px}
+html[data-layout=tablet] #app>aside{width:88px;transform:none;padding:20px 8px;box-shadow:none}
+html[data-layout=tablet] #app>main{margin-left:88px}
+html[data-layout=tablet] #loadingBar{left:88px}
+html[data-layout=tablet] #app>aside .logo{padding:2px 0 22px;justify-content:center}
+html[data-layout=tablet] #app>aside :is(.logo-copy,.nav-label,.aside-version,.tg-mini-card){display:none}
+html[data-layout=tablet] #app>aside nav{gap:4px}
+html[data-layout=tablet] #app>aside nav a{display:flex;flex-direction:column;gap:5px;padding:10px 2px;font-size:10px;min-height:60px}
+html[data-layout=tablet] #app>aside nav a svg{width:21px;height:21px}
+html[data-layout=tablet] #app>aside nav a.active::before{left:-8px}
+html[data-layout=tablet] .aside-logout{font-size:10px;flex-direction:column;padding:8px 0}
+html[data-layout=tablet] #menu,html[data-layout=tablet] .mobile-nav{display:none}
+html[data-layout=tablet] .account-switch{display:flex}
+html[data-layout=tablet] .account-switch select{width:110px}
+html[data-layout=tablet] .manage-accounts-button{display:none}
+html[data-layout=tablet] #content{padding:20px 18px 36px}
+html[data-layout=phone] #app{max-width:600px;margin:0 auto;border-inline:1px solid var(--line);min-height:100dvh}
+html[data-layout=phone] #app>main{margin:0}
+html[data-layout=phone] #app>aside{left:max(0px,calc((100vw - 600px)/2));width:min(280px,85vw);transform:translateX(calc(-100% - max(0px, (100vw - 600px)/2)));padding:22px 16px;box-shadow:none}
+html[data-layout=phone] #app>aside.open{transform:none;box-shadow:20px 0 60px #0004}
+html[data-layout=phone] #loadingBar{left:max(0px,calc((100vw - 600px)/2));right:max(0px,calc((100vw - 600px)/2))}
+html[data-layout=phone] #menu{display:flex;flex:none;width:44px;height:44px}
+html[data-layout=phone] #app header{padding:0 12px;gap:8px;height:72px}
+html[data-layout=phone] #pageTitle{font-size:17px}html[data-layout=phone] #subtitle{display:none}
+html[data-layout=phone] .account-switch{display:none}
+html[data-layout=phone] #viewModeLabel{font-size:11px}html[data-layout=phone] #viewModeButton{padding:8px;gap:4px}
+html[data-layout=phone] #viewModeButton .view-chevron{display:none}
+html[data-layout=phone] #content{padding:16px 12px calc(96px + env(safe-area-inset-bottom));max-width:600px}
+html[data-layout=phone] .mobile-nav{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));position:fixed;z-index:40;width:min(568px,calc(100% - 24px));left:50%;right:auto;transform:translateX(-50%);bottom:calc(8px + env(safe-area-inset-bottom));height:66px;padding:5px;border:1px solid var(--line);border-radius:20px;backdrop-filter:blur(18px)}
+html[data-layout=phone] .mobile-nav button{display:grid;place-items:center;gap:2px;background:transparent;border:0;box-shadow:none;padding:4px;border-radius:14px;min-width:0;min-height:52px}
+html[data-layout=phone] .mobile-nav button svg{width:21px;height:21px}html[data-layout=phone] .mobile-nav button span{font-size:10px}
+html[data-layout=phone] .nav-backdrop{display:block;position:fixed;inset:0;z-index:25;background:#03060b80;opacity:0;pointer-events:none;backdrop-filter:blur(3px)}
+html[data-layout=phone] .nav-backdrop.show{opacity:1;pointer-events:auto}
+html[data-layout=phone] :is(.media-grid,.recent-grid){grid-template-columns:minmax(0,1fr);gap:16px}
+html[data-layout=phone] .toolbar{display:flex;flex-wrap:wrap;padding:10px;gap:8px}
+html[data-layout=phone] .toolbar>input{flex-basis:100%;min-width:0}
+html[data-layout=phone] .toolbar>select{width:auto;min-width:0;flex:1}
+html[data-layout=phone] .toolbar>button{width:auto;min-height:44px;flex:1;padding:8px;font-size:12px}
+html[data-layout=phone] .toolbar>label{flex-basis:100%}
+html[data-layout=phone] .favorite-toolbar>button{flex:1 1 140px;white-space:normal}
+html[data-layout=phone] .hero{padding:20px;align-items:flex-start;flex-direction:column}
+html[data-layout=phone] .hero-actions{width:100%}html[data-layout=phone] .hero-actions button{flex:1}
+html[data-layout=phone] .library-heading h3{font-size:24px}html[data-layout=phone] .library-heading p{font-size:12px}
+html[data-layout=phone] .stat-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+html[data-layout=phone] .stat-card{padding:15px}html[data-layout=phone] .stat-value{font-size:24px}
+html[data-layout=phone] .storage-card{grid-template-columns:minmax(0,1fr)}
+html[data-layout=phone] .dl-row{grid-template-columns:38px minmax(0,1fr);padding:14px}
+html[data-layout=phone] .dl-actions{grid-column:1/-1;flex-wrap:wrap;justify-content:flex-start}
+/* Chat workspace: channel list stays available on larger layouts; thread resembles media messages. */
+.channel-client{display:grid;grid-template-columns:272px minmax(0,1fr);gap:20px;align-items:start;min-height:calc(100dvh - 148px)}
+.channel-list-pane{position:sticky;top:calc(var(--client-header) + 20px);display:flex;flex-direction:column;padding:0!important;max-height:calc(100dvh - var(--client-header) - 40px);overflow:hidden;min-width:0;border-radius:18px}
+.channel-list-heading{display:flex;align-items:center;gap:10px;padding:20px 16px 14px}.channel-list-heading>div{flex:1}.channel-list-heading h3{font-size:20px;letter-spacing:-.03em}.channel-list-heading p{font-size:11px;color:var(--muted);margin-top:4px}
+.channel-list-heading>button{padding:0;width:44px;height:44px;flex:none}.channel-list-heading svg{width:18px;height:18px}
+.channel-search{display:flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:12px;margin:0 12px 12px;padding:2px 5px 2px 10px;background:var(--surface-2)}
+.channel-search>svg{width:17px;height:17px;flex:none;color:var(--muted)}.channel-search input{min-width:0;width:100%;border:0!important;box-shadow:none!important;background:transparent!important;padding:10px 0;font-size:12px}
+.channel-search button{min-height:40px;padding:7px 8px;font-size:11px;flex:none}
+.channel-client-list{overflow:auto;overscroll-behavior:contain;padding:0 6px 8px;min-height:100px;scrollbar-width:thin}
+.channel-client-item{display:flex;align-items:center;text-align:left;gap:11px;width:100%;padding:13px 10px;border:0;border-radius:12px;background:transparent;color:var(--text);box-shadow:none;min-height:76px}
+.channel-client-item:hover,.channel-client-item[aria-current=true]{background:var(--client-wash)}
+.channel-avatar{display:grid;place-items:center;width:44px;height:44px;border-radius:50%;background:linear-gradient(145deg,#77bef0,#507cd1);color:#fff;font-size:18px;font-weight:600;flex:none}
+.channel-client-item:nth-child(3n + 2) .channel-avatar{background:linear-gradient(145deg,#6bc7be,#4c979d)}.channel-client-item:nth-child(3n) .channel-avatar{background:linear-gradient(145deg,#b0a0ef,#8773c6)}
+.channel-copy{flex:1;min-width:0}.channel-copy b{display:block;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.channel-copy small{display:block;font-size:11px;color:var(--muted);margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.channel-client-item>svg{width:14px;height:14px;transform:rotate(-90deg);color:var(--muted);flex:none}
+.server-storage-note{display:flex;gap:10px;align-items:center;padding:16px;border-top:1px solid var(--line);color:var(--text-2);font-size:12px;line-height:1.8;margin-top:auto}.server-storage-note>svg{width:22px;height:22px;color:var(--client-accent);flex:none}.server-storage-note small{color:var(--muted);font-size:10px}
+.channel-thread{min-width:0;padding:20px;border:1px solid var(--line);border-radius:20px;background:radial-gradient(ellipse at top right,var(--client-wash),transparent 65%),var(--bg-2);min-height:calc(100dvh - 148px)}
+.channel-welcome{display:flex;align-items:center;justify-content:center;flex-direction:column;text-align:center;min-height:540px;padding:30px;gap:16px}.channel-welcome h3{font-size:25px;letter-spacing:-.035em}.channel-welcome p{max-width:310px;color:var(--muted);font-size:13px;line-height:1.9}
+.channel-welcome-icon{display:grid;place-items:center;width:88px;height:88px;border-radius:28px;background:var(--client-wash);color:var(--client-accent);margin-bottom:6px}.channel-welcome-icon svg{width:40px;height:40px}
+.channel-storage-pill{display:flex;gap:7px;align-items:center;font-size:10px;color:var(--muted);padding:8px 10px;border:1px solid var(--line);border-radius:20px}.channel-storage-pill svg{width:14px;height:14px}
+.channel-thread .catalog-heading{gap:12px;margin-bottom:14px}.channel-thread .catalog-heading h3{font-size:19px}.channel-thread #catalogBack{display:none}.thread-avatar{width:40px;height:40px;font-size:16px}
+.thread-storage-note{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted);line-height:1.7;margin-bottom:18px}.thread-storage-note svg{width:17px;height:17px;flex:none;color:var(--client-accent)}
+.channel-thread .catalog-toolbar{top:calc(var(--client-header) + 6px);padding:10px;gap:8px;border-radius:13px}
+.channel-thread .catalog-grid{grid-template-columns:minmax(0,1fr);max-width:660px;margin:0 auto;gap:20px}
+.channel-thread .catalog-card{border-radius:7px 18px 18px 18px;box-shadow:0 3px 14px #00000008}
+.channel-thread .catalog-cover{aspect-ratio:16/9}.channel-thread .catalog-body{padding:16px 18px}.channel-thread .catalog-caption{-webkit-line-clamp:4;font-size:12px}
+.channel-thread .catalog-to-top{position:fixed;right:26px;bottom:22px;box-shadow:var(--shadow)}
+.catalog-to-top.ghost{background:var(--surface-solid);border-color:var(--line-strong)}
+html[data-layout=tablet] .channel-client{grid-template-columns:235px minmax(0,1fr);gap:14px}
+html[data-layout=tablet] .channel-thread{padding:16px}
+html[data-layout=phone] .channel-client{display:block;min-height:0}
+html[data-layout=phone] .channel-list-pane{position:static;max-height:none;border:0;background:transparent;border-radius:0}
+html[data-layout=phone] .channel-client-list{overflow:visible;padding:0}
+html[data-layout=phone] .channel-list-heading{padding:4px 4px 16px}
+html[data-layout=phone] .channel-search{margin:0 0 12px}
+html[data-layout=phone] .server-storage-note{margin-top:18px;border:1px solid var(--line);border-radius:14px}
+html[data-layout=phone] .channel-thread{display:none;padding:0;border:0;background:transparent;min-height:0}
+html[data-layout=phone] .channel-client.thread-open .channel-list-pane{display:none}
+html[data-layout=phone] .channel-client.thread-open .channel-thread{display:block}
+html[data-layout=phone] .channel-thread #catalogBack{display:flex;min-height:44px;padding:8px}
+html[data-layout=phone] .thread-avatar{display:none}
+html[data-layout=phone] .channel-thread .catalog-heading h3{font-size:18px}
+html[data-layout=phone] .channel-thread .catalog-heading p{font-size:10px}
+html[data-layout=phone] .channel-thread .catalog-toolbar{top:76px}
+html[data-layout=phone] .catalog-to-top{right:max(16px,calc((100vw - 568px)/2));bottom:calc(90px + env(safe-area-inset-bottom))}
+/* Existing message conversations follow the same chosen single / split pane layout. */
+html[data-layout]:not([data-layout=phone]) .chat-shell:not(.saved-shell){display:grid;grid-template-columns:260px minmax(0,1fr)}
+html[data-layout]:not([data-layout=phone]) .chat-shell .dialog-pane{display:block;transform:none;height:100%;border-right:1px solid var(--line);box-shadow:none}
+html[data-layout]:not([data-layout=phone]) .conversation-pane{display:block;height:100%}
+html[data-layout]:not([data-layout=phone]) .chat-back{display:none}
+html[data-layout=phone] .chat-shell{height:calc(100dvh - 280px);min-height:440px;display:block;position:relative}
+html[data-layout=phone] .chat-shell .dialog-pane{display:block;transform:none;width:auto;height:100%;padding:0;border:0;box-shadow:none}
+html[data-layout=phone] .chat-shell:not(.chat-open) .conversation-pane{display:none}
+html[data-layout=phone] .chat-shell.chat-open .dialog-pane{display:none}
+html[data-layout=phone] .chat-shell.chat-open .conversation-pane{display:block;height:100%}
+html[data-layout=phone] .chat-back{display:flex;width:44px;height:44px}
+html[data-layout=phone] .saved-shell .conversation-pane{display:block!important}
+html[data-layout=phone] .saved-shell .chat-back{display:none}
+html[data-layout=phone] .message-bubble{max-width:92%}
+/* Safety at small physical widths, even if a large-device mode was selected. */
+@media(max-width:1100px){html[data-layout=desktop] .channel-client{grid-template-columns:220px minmax(0,1fr);gap:12px}html[data-layout=desktop] .channel-thread{padding:14px}html[data-layout] .account-switch select{width:100px}html[data-layout] .manage-accounts-button{display:none}}
+@media(max-width:900px){
+  html[data-layout=desktop] #app>aside{transform:translateX(-100%)}html[data-layout=desktop] #app>aside.open{transform:none;box-shadow:20px 0 60px #0004}
+  html[data-layout=desktop] #app>main{margin-left:0}html[data-layout=desktop] #loadingBar{left:0}html[data-layout=desktop] #menu{display:flex;width:44px;height:44px;flex:none}
+  html[data-layout=desktop] .nav-backdrop.show{opacity:1;pointer-events:auto}
+  html[data-layout] #app header{padding:0 14px}html[data-layout] #subtitle{display:none}
+}
+@media(max-width:700px){
+  html[data-layout] #content{padding:16px 12px 36px}html[data-layout=phone] #content{padding-bottom:calc(96px + env(safe-area-inset-bottom))}
+  html[data-layout] .account-switch{display:none}html[data-layout] #app header{gap:8px;padding:0 10px}html[data-layout] #pageTitle{font-size:16px}
+  html[data-layout] #viewModeButton{font-size:11px;padding:8px;gap:4px}html[data-layout] #viewModeButton .view-chevron{display:none}
+  html[data-layout] .channel-client{display:block}html[data-layout] .channel-list-pane{position:static;max-height:none}
+  html[data-layout] .channel-client.thread-open .channel-list-pane{display:none}html[data-layout] .channel-client:not(.thread-open) .channel-thread{display:none}
+  html[data-layout] .channel-client.thread-open .channel-thread{display:block;padding:0;border:0;background:transparent}
+  html[data-layout] .channel-thread #catalogBack{display:flex;min-height:44px;padding:8px}html[data-layout] .thread-avatar{display:none}
+  html[data-layout] .channel-thread .catalog-heading h3{font-size:17px}html[data-layout] .channel-thread .catalog-heading p{font-size:10px}
+  html[data-layout] .catalog-toolbar input{min-width:100px}html[data-layout] .catalog-toolbar select{min-width:90px}
+  html[data-layout] .catalog-toolbar>button{flex:1;min-height:44px;padding:8px}
+  html[data-layout] .media-grid{grid-template-columns:minmax(0,1fr)}
+  html[data-layout]:not([data-layout=phone]) .chat-shell:not(.saved-shell){display:block}
+  html[data-layout] .chat-shell:not(.chat-open):not(.saved-shell) .conversation-pane{display:none}
+  html[data-layout] .chat-shell.chat-open .dialog-pane{display:none}
+  html[data-layout] .chat-back{display:flex;width:44px;height:44px}
+}
+@media(max-width:460px){
+  html[data-layout=tablet] #app>aside{width:64px;padding:16px 4px}html[data-layout=tablet] #app>main{margin-left:64px}html[data-layout=tablet] #loadingBar{left:64px}
+  html[data-layout=tablet] #app>aside nav a{font-size:9px}html[data-layout=tablet] #app header{gap:5px;padding:0 7px}
+  html[data-layout=tablet] #viewModeButton>svg{display:none}html[data-layout=tablet] #viewModeButton{padding:7px;font-size:10px}
+  html[data-layout=tablet] .theme-toggle{width:36px;min-width:36px}
+  html[data-layout=tablet] #content{padding-inline:8px}
+  html[data-layout=tablet] .catalog-heading{gap:6px}html[data-layout=tablet] .catalog-heading h3{font-size:15px}
+}
+@media(prefers-reduced-motion:reduce){#app>aside{transition:none}}

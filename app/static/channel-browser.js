@@ -2,15 +2,54 @@
 (function () {
   'use strict';
   let view = null, run = 0;
+  let channelRequest = 0;
   const times = n => `${Math.floor((n || 0) / 60)}:${String(Math.floor((n || 0) % 60)).padStart(2, '0')}`;
   const labels = { queued:'排队中', downloading:'下载中', pausing:'暂停中', paused:'已暂停', retrying:'等待续传', failed:'下载失败', cancelled:'已取消', completed:'已下载' };
-  const valid = v => view === v && activePage === 'channels' && document.querySelector('#videoList') === v.grid;
+  const valid = v => !!v && view === v && activePage === 'channels' && document.querySelector('#videoList') === v.grid;
   const itemBody = (x,account) => ({account_id:account,channel_id:x.channel_id,message_id:x.message_id,channel_title:x.channel_title,file_name:x.file_name,size:x.size});
   function stop() {
     if (!view) return;
     view.observer?.disconnect(); view.covers?.disconnect(); clearTimeout(view.poll);
     view.coverQueue.length = 0; view = null;
   }
+  // Keep the channel list mounted when opening a video thread, like a chat client.
+  window.channels = async function () {
+    stop();
+    const state = await telegramState(); if (activePage !== 'channels') return;
+    if (!state.authorized) {
+      content.innerHTML = '<div class="card empty"><h3>连接你的 Telegram</h3><p>登录后浏览频道，将喜欢的视频保存到服务器。</p><button onclick="go(\'telegram\')">扫码 / API 登录</button></div>'; return;
+    }
+    content.innerHTML = `<div class="channel-client" id="channelClient"><section class="channel-list-pane card" aria-label="频道列表">
+      <div class="channel-list-heading"><div><h3>频道</h3><p>你的 Telegram 视频来源</p></div><button class="ghost" id="channelRefresh" aria-label="刷新频道"><svg><use href="#i-refresh"/></svg></button></div>
+      <form class="channel-search" id="channelSearchForm"><svg><use href="#i-search"/></svg><input id="channelSearch" type="search" placeholder="搜索频道" aria-label="搜索频道"><button class="ghost" type="submit">搜索</button></form>
+      <div id="channelGrid" class="channel-client-list"></div><div class="server-storage-note"><svg><use href="#i-cloud"/></svg><span>下载保存在服务器<br><small>手机关闭网页也能继续下载</small></span></div></section>
+      <section id="channelThread" class="channel-thread" aria-label="频道视频"><div class="channel-welcome"><span class="channel-welcome-icon"><svg><use href="#i-chat"/></svg></span><h3>从一个频道开始</h3><p>像浏览聊天一样挑选视频。点亮星标，或将原文件下载到服务器，稍后继续观看。</p><span class="channel-storage-pill"><svg><use href="#i-cloud"/></svg>服务器保存 · 原画播放 · 随时收藏</span></div></section></div>`;
+    document.querySelector('#channelSearchForm').onsubmit = event => {event.preventDefault();loadChannels(false);};
+    document.querySelector('#channelRefresh').onclick = () => loadChannels(true);
+    await loadChannels(false);
+  };
+  window.loadChannels = async function (refresh = false) {
+    const box = document.querySelector('#channelGrid'); if (!box) return;
+    const request = ++channelRequest;
+    box.innerHTML = '<div class="loading-card"><div class="spinner"></div>正在读取频道…</div>';
+    try {
+      const items = await api('/channels?q=' + encodeURIComponent(document.querySelector('#channelSearch').value) + (refresh ? '&refresh=true' : ''), {}, 60000);
+      if (!box.isConnected || request !== channelRequest) return;
+      box.replaceChildren();
+      for (const channel of items) {
+        const button = document.createElement('button');button.type = 'button';button.className = 'channel-client-item';button.dataset.channelId = channel.id;
+        button.innerHTML = `<span class="channel-avatar">${esc(Array.from(channel.title || '频')[0])}</span><span class="channel-copy"><b>${esc(channel.title)}</b><small>${channel.username ? '@' + esc(channel.username) : '私有频道'} · 视频归档</small></span><svg><use href="#i-chevron"/></svg>`;
+        button.setAttribute('aria-current', String(valid(view) && Number(view.channel.id) === Number(channel.id)));
+        button.onclick = () => openChannel(channel);box.append(button);
+      }
+      if (!items.length) box.innerHTML = '<div class="empty compact">没有找到频道<br><small>试试其他名称，或刷新频道</small></div>';
+    } catch (error) {
+      if (box.isConnected && request === channelRequest) {
+        box.innerHTML = `<div class="empty compact"><p>${esc(error.message)}</p><button class="ghost">重新加载</button></div>`;
+        box.querySelector('button').onclick = () => loadChannels(false);
+      }
+    }
+  };
   function paintState(v, x, card) {
     const status = x.downloaded ? 'completed' : x.download_status;
     const busy = ['queued','downloading','pausing','retrying'].includes(status);
@@ -23,14 +62,14 @@
     checkbox.checked = selected.has(x.message_id) && !checkbox.disabled;
     if (checkbox.disabled) selected.delete(x.message_id);
     const button = card.querySelector('.catalog-download');
-    button.disabled = busy; button.textContent = x.downloaded ? '播放原画' : busy ? labels[status] : ['paused','failed','cancelled'].includes(status) ? '继续下载' : '下载视频';
+    button.disabled = busy; button.textContent = x.downloaded ? '播放原画' : busy ? labels[status] : ['paused','failed','cancelled'].includes(status) ? '继续下载' : '下载到服务器';
     button.onclick = async () => {
       if (x.downloaded) return x.local_media_id ? play(x.local_media_id) : playSource(x.channel_id,x.message_id);
       button.disabled = true;
       try {
         if (x.download_id && ['paused','failed','cancelled'].includes(status)) await api(`/downloads/${x.download_id}/${status === 'paused' ? 'resume' : 'retry'}`,{method:'POST'});
         else {const result = await api('/downloads',{method:'POST',body:JSON.stringify([itemBody(x,v.account)])});x.download_id=result[0].id;}
-        x.download_status='queued';paintState(v,x,card);toast('已加入下载，继续挑选即可');updateToolbar(v);
+        x.download_status='queued';paintState(v,x,card);toast('已加入服务器下载，关闭网页后仍会继续');updateToolbar(v);
       } catch (e) {button.disabled=false;toast(e.message);}
     };
   }
@@ -44,7 +83,7 @@
       card.hidden = !matches;if (matches) shown++;
     }
     document.querySelector('#catalogCount').textContent = `已浏览 ${v.items.size} 个视频 · 显示 ${shown} 个`;
-    document.querySelector('#queueBtn').textContent = `下载选中 (${selected.size})`;
+    document.querySelector('#queueBtn').textContent = `下载到服务器 (${selected.size})`;
     document.querySelector('#queueBtn').disabled = !selected.size;
     document.querySelector('#catalogEmpty').hidden = shown > 0 || v.loading;
   }
@@ -103,15 +142,23 @@
     if(valid(v))v.poll=setTimeout(()=>refreshTasks(v),5000);
   }
   window.openChannel = function (channel) {
+    const thread = document.querySelector('#channelThread');
+    if (valid(view) && Number(view.channel.id) === Number(channel.id)) {
+      document.querySelector('#channelClient')?.classList.add('thread-open');
+      document.querySelector('#pageTitle').textContent=channel.title;return;
+    }
     stop();const id=++run;selected.clear();currentChannel=channel;
     const account=Number(document.querySelector('#accountSelector').value);
     document.querySelector('#pageTitle').textContent=channel.title;
-    content.innerHTML=`<div class="catalog-heading"><button class="ghost" id="catalogBack">← 频道</button><div><h3>${esc(channel.title)}</h3><p class="muted" id="catalogCount">正在读取视频…</p></div><button class="ghost" id="catalogRefresh">刷新</button></div>
+    (thread || content).innerHTML=`<div class="catalog-heading"><button class="ghost" id="catalogBack">← 频道</button><span class="channel-avatar thread-avatar">${esc(Array.from(channel.title || '频')[0])}</span><div><h3>${esc(channel.title)}</h3><p class="muted" id="catalogCount">正在读取视频…</p></div><button class="ghost" id="catalogRefresh">刷新</button></div>
+      <div class="thread-storage-note"><svg><use href="#i-cloud"/></svg>下载保存到服务器，完成后在媒体库播放或另存到手机 / 电脑。</div>
       <div class="catalog-toolbar card"><input id="catalogSearch" placeholder="筛选已加载的视频" aria-label="筛选视频"><select id="catalogFilter" aria-label="下载状态筛选"><option value="all">全部视频</option><option value="new">未下载</option><option value="downloaded">已下载</option></select><button class="ghost" id="catalogSelect">全选可下载</button><button id="queueBtn" disabled>下载选中 (0)</button></div>
       <div id="videoList" class="catalog-grid"></div><div id="catalogEmpty" class="card empty" hidden><h3>当前没有匹配的视频</h3><p>可调整筛选，或继续加载更早的视频。</p></div><div class="catalog-pagination"><button class="ghost" id="catalogMore">加载更多视频</button><p class="muted">下滑自动加载，连续三页后可点击继续；选择的视频会保留。</p></div><button class="catalog-to-top ghost" id="catalogTop" aria-label="回到列表顶部">↑ 顶部</button>`;
     const v=view={id,channel,account,grid:document.querySelector('#videoList'),items:new Map(),offset:0,more:true,loading:false,autoPages:0,coverQueue:[],coverActive:0};
-    document.querySelector('#catalogBack').onclick=()=>{stop();go('channels');};
-    document.querySelector('#catalogRefresh').onclick=()=>openChannel(channel);
+    document.querySelector('#channelClient')?.classList.add('thread-open');
+    document.querySelectorAll('.channel-client-item').forEach(button => button.setAttribute('aria-current', String(Number(button.dataset.channelId) === Number(channel.id))));
+    document.querySelector('#catalogBack').onclick=()=>{const shell=document.querySelector('#channelClient');if(shell){shell.classList.remove('thread-open');document.querySelector('#pageTitle').textContent='频道视频';scrollTo({top:0});}else{stop();go('channels');}};
+    document.querySelector('#catalogRefresh').onclick=()=>{stop();openChannel(channel);};
     document.querySelector('#catalogTop').onclick=()=>scrollTo({top:0,behavior:'smooth'});
     document.querySelector('#catalogFilter').onchange=document.querySelector('#catalogSearch').oninput=()=>updateToolbar(v);
     document.querySelector('#catalogSelect').onclick=()=>{const boxes=[...v.grid.querySelectorAll('article:not([hidden]) input:not(:disabled)')];const check=boxes.some(x=>!x.checked);boxes.forEach(x=>{x.checked=check;x.dispatchEvent(new Event('change'));});};
@@ -124,7 +171,7 @@
         let count=0;
         if(fresh.length){const result=await api('/downloads',{method:'POST',body:JSON.stringify(fresh.map(x=>itemBody(x,v.account)))});result.forEach((row,i)=>{mark(fresh[i],row.id);if(!row.duplicate)count++;});}
         for(const x of xs.filter(x=>!fresh.includes(x))){await api(`/downloads/${x.download_id}/${x.download_status==='paused'?'resume':'retry'}`,{method:'POST'});mark(x,x.download_id);count++;}
-        if(valid(v)){updateToolbar(v);toast(`已加入 ${count} 个任务，可继续挑选${selected.size?'；剩余选中项可再次提交':''}`);}
+        if(valid(v)){updateToolbar(v);toast(`已加入 ${count} 个服务器下载任务${selected.size?'；剩余选中项可再次提交':''}`);}
       }catch(e){toast(e.message);if(valid(v))updateToolbar(v);}
     };
     document.querySelector('#catalogMore').onclick=()=>{v.autoPages=0;load(v);};
