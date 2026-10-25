@@ -12,6 +12,7 @@ try {
   await page.evaluate(()=>{localStorage.removeItem('tvm-pos-1');play(1)});
   await page.waitForFunction(()=>document.querySelector('#player')?.currentTime>.1);
   assert.equal(await page.locator('#qualityButton').innerText(),'原画');
+  await page.locator('#offlineEnhancement > summary').click();
   await page.locator('#enhanceButton').click();
   const deadline=Date.now()+90000;
   let state;
@@ -58,7 +59,7 @@ try {
     if(route.request().method()==='GET')return route.fulfill({json:{id:1,status:'queued',ready:false,progress:0,size:0,error:'',waiting_for_downloads:true}});
     await route.continue();
   });
-  await page.evaluate(()=>play(1));await page.locator('#enhanceCancel').waitFor({state:'visible'});
+  await page.evaluate(()=>play(1));await page.locator('#offlineEnhancement > summary').click();await page.locator('#enhanceCancel').waitFor({state:'visible'});
   assert.ok((await page.locator('#enhanceStatus').innerText()).includes('优先下载'));
   const cancelled=page.waitForRequest(r=>r.url().endsWith('/api/media/1/enhanced')&&r.method()==='DELETE');
   await page.locator('#enhanceCancel').click();await cancelled;

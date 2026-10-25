@@ -223,8 +223,9 @@
       <div class="actions" style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:18px">
         <button onclick="closeModal();play(${id},'original')">${icon('play')} 原画播放</button>
         <button class="ghost" onclick="pDownload(${id})">${icon('download')} 另存原画到手机 / 电脑</button>
+        <button class="ghost" onclick="closeModal();play(${id},'realtime')">${icon('zap')} 实时增强 · 不另存视频</button>
         ${ready ? `<button class="ghost" onclick="closeModal();play(${id},'smooth')">${icon('zap')} 播放 480P 流畅版</button><button class="ghost" onclick="pDownload(${id},'smooth')">${icon('download')} 下载 480P</button>` : busy ? `<button class="ghost" disabled>${icon('zap')} 流畅版生成中 ${Math.round(x.smooth_progress || 0)}%</button>` : `<button class="ghost" onclick="pStartSmooth(${id},this)">${icon('zap')} 生成 480P 流畅版</button>`}
-        ${enhancementReady(x) ? `<button class="ghost" onclick="closeModal();play(${id},'enhanced')">${icon('zap')} 播放轻度增强版</button><button class="ghost" onclick="pDownload(${id},'enhanced')">${icon('download')} 下载增强版</button><button class="ghost" onclick="pRemoveEnhanced(${id})">仅移除增强版</button>` : `<button class="ghost" onclick="pStartEnhanced(${id},this)">${['queued','processing'].includes(x.enhanced_status) ? '查看增强进度' : '生成轻度增强版'}</button>`}
+        ${enhancementReady(x) ? `<button class="ghost" onclick="closeModal();play(${id},'enhanced')">${icon('zap')} 播放已存增强版</button><button class="ghost" onclick="pDownload(${id},'enhanced')">${icon('download')} 下载已存增强版</button><button class="ghost" onclick="pRemoveEnhanced(${id})">仅移除已存增强版</button>` : `<button class="ghost" onclick="pStartEnhanced(${id},this)">${['queued','processing'].includes(x.enhanced_status) ? '查看离线增强进度' : '离线增强（占用存储）'}</button>`}
         <button class="ghost" onclick="closeModal();sendMediaToSaved(${id})">${icon('star')} 上传收藏夹</button>
         <button class="ghost" onclick="closeModal();renameMedia(${id},'${encodeURIComponent(x.file_name)}')">${icon('film')} 重命名</button>
         <button class="danger" style="grid-column:1/-1" onclick="closeModal();deleteMedia(${id})">${icon('x')} 永久删除</button>
@@ -308,6 +309,7 @@
             <div class="volume-wrap" id="volumeWrap"><input id="volumeInput" type="range" min="0" max="1" step="0.05" value="1" aria-label="音量"></div>
             <button class="ctl" id="muteToggle" type="button" aria-label="静音">${icon('volume')}</button>
             <button class="ctl" id="speedButton" type="button" aria-label="播放速度">1×</button>
+            <button class="ctl" id="realtimeButton" data-lock-disable type="button" aria-label="实时增强：关闭，打开设置" aria-controls="realtimePanel" aria-expanded="false" aria-pressed="false">增强</button>
             <button class="ctl" id="lockButton" type="button" aria-label="锁定界面方向" aria-pressed="false" title="锁定界面方向，仍可快进和选集">${icon('unlock')}</button>
             <button class="ctl" id="pipButton" data-lock-disable type="button" aria-label="画中画">${icon('pip')}</button>
             <a class="ctl" id="downloadButton" data-lock-disable href="/api/media/${id}/stream?download=true" download title="下载原画到本机" aria-label="下载到本机">${icon('download')}</a>
@@ -326,20 +328,28 @@
         <div class="episode-list" id="episodeList"></div><p class="episode-empty" id="episodeEmpty" hidden>没有匹配的视频</p>
         <button class="ghost" id="episodeRetry" type="button" hidden>重新读取列表</button><button class="ghost" id="episodeMore" type="button" hidden>显示更多</button>
       </section>
+      <section id="realtimePanel" class="realtime-panel" data-lock-disable hidden role="dialog" aria-label="实时画质增强">
+        <div class="realtime-heading"><div><b>实时画质增强</b><span>边看边增强 · 不额外存片</span></div><button class="ctl" id="realtimeClose" type="button" aria-label="关闭增强设置">${icon('x')}</button></div>
+        <div class="realtime-choices" role="group" aria-label="增强强度"><button type="button" data-realtime-mode="off" aria-pressed="true">关闭</button><button type="button" data-realtime-mode="natural" aria-pressed="false">自然</button><button type="button" data-realtime-mode="clear" aria-pressed="false">清晰</button><button type="button" data-realtime-mode="strong" aria-pressed="false">较强</button></div>
+        <button class="realtime-compare" id="realtimeCompare" type="button" disabled>按住看原画，松手恢复增强</button><p id="realtimeDetail" role="status"></p>
+      </section>
       <div class="player-foot"><div class="player-meta"><span class="original-pill" id="metaQuality">${quality === 'smooth' ? '480P 流畅' : '原画 · 原始编码'}</span><span id="metaBitrate"></span><span>音画同步播放</span></div><div class="player-actions"><button class="ghost" id="smoothButton" type="button">${smooth ? '切换流畅版' : '生成流畅版'}</button><a id="originalDownloadLink" href="/api/media/${id}/stream?download=true" download>${icon('download')} 下载原文件</a></div></div>
-      <div class="enhancement-tools" data-lock-disable><div class="enhancement-copy"><b>轻度增强</b><span id="enhanceStatus" role="status">改善清晰度 · 原画保留</span></div><div class="enhancement-actions"><button class="ghost" id="enhanceButton" type="button">生成轻度增强版</button><button class="ghost" id="enhanceCancel" type="button" hidden>取消生成</button><a class="ghost" id="enhanceDownload" download hidden>下载增强版</a></div></div>
+      <div class="realtime-summary" data-lock-disable><div><b>实时增强</b><span id="realtimeStatus" role="status">不额外存片 · 开启即生效</span></div><button id="realtimeOpen" class="ghost" type="button" aria-controls="realtimePanel">选择实时增强</button></div>
+      <details id="offlineEnhancement" class="offline-enhancement" data-lock-disable><summary>离线增强 · 另存一份，占用存储</summary><div class="enhancement-tools"><div class="enhancement-copy"><b>生成独立增强文件</b><span id="enhanceStatus" role="status">改善清晰度 · 原画保留</span></div><div class="enhancement-actions"><button class="ghost" id="enhanceButton" type="button">生成轻度增强版</button><button class="ghost" id="enhanceCancel" type="button" hidden>取消生成</button><a class="ghost" id="enhanceDownload" download hidden>下载增强版</a></div></div></details>
       <div class="player-error" id="playerError" role="status" hidden></div>
     </div></div>`, true);
     const video = $('#player'), stage = $('#playerStage'), spinner = $('#playerSpinner');
     const buffer = $('#bufferStatus'), playToggle = $('#playToggle');
     const seek = $('#seekInput'), played = $('#seekPlayed'), buffered = $('#seekBuffer'), thumb = $('#seekThumb');
     const qualityButton = $('#qualityButton'), smoothButton = $('#smoothButton'), downloadButton = $('#downloadButton');
-    let enhancement;
+    let enhancement, realtime;
     let scrubber, queue;
     const loading = attachPlayerBuffer({ video, node: buffer, spinner });
     const shell = $('#playerShell');
-    const controls = attachPlayerControls({ shell, stage, video, scrubbing: () => scrubber?.dragging(), interacting: () => queue?.isOpen() });
-    const locker = attachPlayerLock({ shell, button: $('#lockButton'), changed: () => controls.show(), notice: toast });
+    const controls = attachPlayerControls({ shell, stage, video, scrubbing: () => scrubber?.dragging(), interacting: () => queue?.isOpen() || realtime?.isOpen() });
+    const locker = attachPlayerLock({ shell, button: $('#lockButton'), changed: locked => { if (locked) realtime?.close(); controls.show(); }, notice: toast });
+    realtime = attachRealtimeEnhancement({shell, stage, video, changed: () => controls.show(), notice: toast});
+    if (preferred === 'realtime') { realtime.setMode('natural'); $('#realtimeButton').click(); }
     let storyboard = createSeekPreview(id, $('#seekPreview'));
     const preview = (at, active = false) => {
       const d = Number(video.duration) || Number(x.duration) || 0;
@@ -550,7 +560,7 @@
     const backdrop = event => { if (event.target.id === 'modal' && !locker.isLocked()) close(); };
     const close = () => {
       if (closed) return;
-      closed = true; sourceRun++; episodeRequest++; clearInterval(smoothTimer); enhancement?.destroy(); queue.destroy(); locker.destroy(); controls.destroy(); scrubber.destroy(); storyboard.destroy(); loading.destroy();
+      closed = true; sourceRun++; episodeRequest++; clearInterval(smoothTimer); realtime.destroy(); enhancement?.destroy(); queue.destroy(); locker.destroy(); controls.destroy(); scrubber.destroy(); storyboard.destroy(); loading.destroy();
       try { localStorage.setItem('tvm-pos-' + id, String(restorePosition ?? video.currentTime)); } catch {}
       hls?.destroy(); hls = null; video.pause(); video.removeAttribute('src'); video.load();
       document.removeEventListener('keydown', keyHandler); $('#modal').removeEventListener('click', backdrop);
@@ -561,12 +571,13 @@
     const keyHandler = event => {
       if (closed) return;
       if (event.key === 'Escape') {
-        if (queue.isOpen()) queue.close();
+        if (realtime.isOpen()) realtime.close();
+        else if (queue.isOpen()) queue.close();
         else if (locker.isLocked()) void locker.setLocked(false);
         else close();
         return;
       }
-      if (event.target.matches('input,textarea,select')) return;
+      if (event.defaultPrevented || event.target.closest('#realtimePanel') || event.target.matches('input,textarea,select')) return;
       if (event.code === 'Space') { event.preventDefault(); toggle(); }
       else if (event.code === 'ArrowLeft') { event.preventDefault(); skip(-5); }
       else if (event.code === 'ArrowRight') { event.preventDefault(); skip(5); }
