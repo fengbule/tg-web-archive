@@ -141,24 +141,34 @@ class TelegramAccountService:
             x['download_id']=job['id'] if job else None
             x['download_progress']=min(100,round(job['downloaded_bytes']/job['total_bytes']*100,1)) if job and job['total_bytes'] else 0
         return {'items':out,'next_offset_id':last if len(out)==limit else None,'account_id':self.account_id}
-    async def thumbnail(self,channel_id,message_id):
+    def _save_local_cover(self,channel_id,message_id,path):
+        # Keep the extracted frame on disk; only the presentation pointer changes.
+        if self.thumbnail_origin(path)!='local-frame':
+            self.db.execute('UPDATE media SET thumb_path=? WHERE account_id=? AND channel_id=? AND message_id=? AND COALESCE(thumb_path,\'\')!=?',
+                (str(path),self.account_id,int(channel_id),int(message_id),str(path)))
+        return path
+    async def thumbnail(self,channel_id,message_id,refresh=False):
         local=self.db.one('SELECT thumb_path FROM media WHERE account_id=? AND channel_id=? AND message_id=?',(self.account_id,int(channel_id),int(message_id)))
         fallback=Path(local['thumb_path']) if local and local['thumb_path'] else None
         if fallback and not fallback.is_file(): fallback=None
         # A new namespace prevents an old document thumbnail from masking a custom cover.
         target=self.thumb_dir/'source-v2'/str(self.account_id)/str(channel_id)/f'{message_id}.jpg'
-        if target.is_file() and target.stat().st_size: return target
+        cached=target.is_file() and target.stat().st_size
+        if cached and not refresh and time.time()-target.stat().st_mtime<86400:
+            return self._save_local_cover(channel_id,message_id,target)
+        if cached: fallback=target
         key=(int(channel_id),int(message_id))
-        if fallback and time.monotonic()<self.thumbnail_backoff.get(key,0): return fallback
+        if not refresh and fallback and time.monotonic()<self.thumbnail_backoff.get(key,0): return fallback
         entry=self.thumbnail_locks.setdefault(key,[asyncio.Lock(),0])
         entry[1]+=1
         try:
             async with entry[0], self.thumbnail_gate:
-                if target.is_file() and target.stat().st_size: return target
-                if fallback and time.monotonic()<self.thumbnail_backoff.get(key,0): return fallback
+                if target.is_file() and target.stat().st_size and not refresh and time.time()-target.stat().st_mtime<86400:
+                    return self._save_local_cover(channel_id,message_id,target)
+                if not refresh and fallback and time.monotonic()<self.thumbnail_backoff.get(key,0): return fallback
                 try:
                     async with asyncio.timeout(8 if fallback else 20):
-                        c=await self.get_client(); msg=self.video_messages.get(key)
+                        c=await self.get_client(); msg=None if refresh or cached else self.video_messages.get(key)
                         if msg is None:
                             entity=await c.get_entity(int(channel_id)); msg=await c.get_messages(entity,ids=int(message_id))
                         if msg and msg.video:
@@ -175,7 +185,9 @@ class TelegramAccountService:
                                     p=Path(result) if result else temp
                                     if p.is_file() and p.stat().st_size:
                                         await asyncio.to_thread(self._validate_cover,p)
-                                        os.replace(p,target);target.with_suffix('.source').write_text(origin,encoding='ascii');return target
+                                        os.replace(p,target);target.with_suffix('.source').write_text(origin,encoding='ascii')
+                                        self.thumbnail_backoff.pop(key,None)
+                                        return self._save_local_cover(channel_id,message_id,target)
                                 except asyncio.CancelledError: raise
                                 except Exception: pass  # A missing custom cover can still have a document thumbnail.
                                 finally: temp.unlink(missing_ok=True)

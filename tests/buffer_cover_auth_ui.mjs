@@ -1,0 +1,53 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
+const base=process.env.TEST_URL||'http://127.0.0.1:8082';
+const output=process.env.TEST_OUTPUT||'/data/workspace/tg-web-archive-e2e';await fs.mkdir(output,{recursive:true});
+const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
+try{
+ const ctx=await browser.newContext({viewport:{width:390,height:844},hasTouch:true});const page=await ctx.newPage(),errors=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ await page.goto(base);assert.ok(await page.locator('#adminPassword').isVisible());assert.ok(!await page.locator('#app').isVisible());
+ for(const path of ['/api/media','/api/media/1/stream','/api/media/1/thumbnail','/api/media/1/hls/v2/index.m3u8','/api/accounts','/api/media/covers/refresh'])assert.equal((await ctx.request.get(base+path)).status(),401);
+ await page.locator('#adminPassword').fill('fixture-admin-password');await page.locator('#adminLoginButton').click();await page.locator('#app').waitFor({state:'visible'});
+ const behavior=await page.evaluate(async()=>{
+  const video=new EventTarget();Object.assign(video,{currentTime:10,duration:60,seeking:true,readyState:1,buffered:{length:0}});
+  const node=document.createElement('div'),spinner=document.createElement('div');document.body.append(node,spinner);
+  const monitor=attachPlayerBuffer({video,node,spinner});let handlers={};
+  const hls={on:(key,fn)=>handlers[key]=fn,off:key=>delete handlers[key]};monitor.reset(10);monitor.bind(hls,{FRAG_LOADING:'loading',FRAG_LOADED:'loaded'});
+  const fragment={start:8,duration:4,stats:{loaded:300,total:1000}};handlers.loading(null,{frag:fragment});const first=node.dataset.percent;
+  fragment.stats.loaded=470;await new Promise(r=>setTimeout(r,180));const next=node.dataset.percent;
+  await new Promise(r=>setTimeout(r,350));const unchanged=node.dataset.percent;
+  // An abandoned fragment must not contribute to the next seek.
+  video.currentTime=30;video.dispatchEvent(new Event('seeking'));const reset=node.dataset.percent;
+  handlers.loaded(null,{frag:fragment});const oldIgnored=node.dataset.percent;
+  video.buffered={length:1,start:()=>30,end:()=>30.9};video.dispatchEvent(new Event('progress'));const native1=Number(node.dataset.percent);
+  video.buffered.end=()=>31.5;video.dispatchEvent(new Event('progress'));const native2=node.dataset.percent;
+  video.seeking=false;video.readyState=3;video.dispatchEvent(new Event('canplay'));const ready=node.dataset.percent;
+  await new Promise(r=>setTimeout(r,400));const hidden=node.hidden;
+  const prefetch={start:40,duration:4,stats:{loaded:500,total:1000}};handlers.loading(null,{frag:prefetch});
+  video.currentTime=40;video.buffered={length:0};video.dispatchEvent(new Event('waiting'));const stalledPrefetch=node.dataset.percent;
+  monitor.destroy();node.remove();spinner.remove();
+  return{first,next,unchanged,reset,oldIgnored,native1,native2,ready,hidden,stalledPrefetch,removed:Object.keys(handlers).length===0};
+ });
+ assert.equal(behavior.first,'30');assert.equal(behavior.next,'47');assert.equal(behavior.unchanged,'47','no timer-generated fake progress');
+ assert.equal(behavior.reset,'0');assert.equal(behavior.oldIgnored,'0');assert.ok(behavior.native1>=29&&behavior.native1<=30);assert.equal(behavior.native2,'50');assert.equal(behavior.ready,'100');assert.equal(behavior.stalledPrefetch,'50');assert.ok(behavior.hidden&&behavior.removed);
+ await page.evaluate(()=>go('library'));await page.locator('#refreshCoversButton').click();
+ await page.waitForFunction(()=>document.querySelector('#refreshCoversButton')?.disabled===false);
+ const sync=await page.evaluate(()=>api('/media/covers/refresh'));assert.equal(sync.status,'completed');assert.equal(sync.original,1);assert.equal(sync.updated,1);
+ const before=await page.evaluate(()=>api('/media/1'));assert.ok(before.thumb_path.includes('/source-v2/'),'downloaded media pointer now uses the TG image');
+ await page.waitForFunction(async()=>{const p=await api('/media/1/playback');return p.status==='ready'});
+ const cdp=await ctx.newCDPSession(page);await cdp.send('Network.enable');await cdp.send('Network.setCacheDisabled',{cacheDisabled:true});
+ await cdp.send('Network.emulateNetworkConditions',{offline:false,latency:100,downloadThroughput:10000,uploadThroughput:100000});
+ await page.evaluate(()=>{window.__bufferValues=[];const observer=new MutationObserver(()=>{const n=document.querySelector('#bufferStatus');if(n&&!n.hidden&&n.dataset.percent)__bufferValues.push(Number(n.dataset.percent))});observer.observe(document.querySelector('#modalBody'),{subtree:true,attributes:true,attributeFilter:['data-percent']});window.__bufferObserver=observer;localStorage.removeItem('tvm-pos-1');play(1)});
+ await page.waitForFunction(()=>document.querySelector('#player')?.currentTime>.1,null,{timeout:90000});
+ await page.locator('#playToggle').click();
+ const values=await page.evaluate(()=>[...new Set(__bufferValues.filter(x=>x>0&&x<100))]);assert.ok(values.length>=2,`real throttled HLS should produce changing byte progress: ${values}`);
+ await page.evaluate(()=>{__bufferObserver.disconnect();document.querySelector('#seekInput').value='6500';document.querySelector('#seekInput').dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#seekInput').dispatchEvent(new Event('change',{bubbles:true}));});
+ await page.waitForFunction(()=>!document.querySelector('#bufferStatus').hidden);await page.screenshot({path:output+'/buffer-cover-phone.png'});
+ await cdp.send('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});
+ await page.waitForFunction(()=>document.querySelector('#player')?.currentTime>15&&!document.querySelector('#player').seeking,null,{timeout:90000});
+ assert.equal(await page.locator('#player').evaluate(v=>v.paused),true,'seeking while paused must preserve pause');
+ await cdp.send('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});
+ await page.locator('#playerClose').click();assert.deepEqual(errors,[]);console.log('BUFFER_COVER_AUTH_UI=PASS '+JSON.stringify({behavior,real_hls_percent_values:values}));
+}finally{await browser.close()}

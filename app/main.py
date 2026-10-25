@@ -16,6 +16,7 @@ from .transcoder import Transcoder
 from .zipstream import zip_media_files
 from .account_backup import collect_accounts, encrypt_backup, decrypt_backup, restore_accounts, MAX_BACKUP_BYTES
 from .favorites import Favorites
+from .cover_refresh import CoverRefresh
 from typing import Literal
 
 logging.basicConfig(level=os.getenv('LOG_LEVEL','INFO'),format='%(asctime)s %(levelname)s %(name)s %(message)s')
@@ -28,6 +29,7 @@ favorites=Favorites(db)
 secret=os.environ['SESSION_SECRET']; serializer=URLSafeTimedSerializer(secret,salt='admin-session')
 cipher=Fernet(os.environ['CONFIG_ENCRYPTION_KEY'].encode())
 tg=TelegramManager(ROOT/'session',ROOT/'thumbnails'/'telegram',db,cipher)
+cover_refresh=CoverRefresh(db,tg)
 if os.getenv('TELEGRAM_CLIENT_CONFIG'):
     client_config=json.loads(Path(os.environ['TELEGRAM_CLIENT_CONFIG']).read_text())
     if not tg.service().api_configured():
@@ -47,7 +49,7 @@ outbox=OutboxSender(db,tg,ROOT)
 async def lifespan(app):
     db.recover_interrupted()
     await downloader.start(); await transcoder.start(); await outbox.start(); yield
-    await outbox.stop(); await transcoder.stop(); await downloader.stop()
+    await cover_refresh.stop(); await outbox.stop(); await transcoder.stop(); await downloader.stop()
     await tg.disconnect_all()
 app=FastAPI(title='Telegram 视频管理器',lifespan=lifespan,docs_url=None,redoc_url=None)
 
@@ -475,6 +477,11 @@ def download_zip(ids:str=''):
     return StreamingResponse(zip_media_files(items),media_type='application/zip',headers={
         'Content-Disposition':f"attachment; filename*=UTF-8''{quote(name)}",
         'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+@app.get('/api/media/covers/refresh')
+def cover_refresh_status(): return dict(cover_refresh.state)
+@app.post('/api/media/covers/refresh')
+async def start_cover_refresh(): return cover_refresh.start()
+
 @app.get('/api/media/{id}/smooth')
 def smooth_status(id:int):
     x=db.one('SELECT id,smooth_status,smooth_progress,smooth_error,smooth_size,smooth_path FROM media WHERE id=?',(id,))

@@ -24,7 +24,7 @@
     if (hour < 18) return '下午好';
     return '晚上好';
   };
-  const thumbUrl = (x) => `/api/media/${x.id}/thumbnail?v=2`;
+  const thumbUrl = (x) => `/api/media/${x.id}/thumbnail?v=3`;
   const smoothReady = (x) => x && x.smooth_status === 'ready' && x.smooth_path;
   const smoothBusy = (x) => x && (x.smooth_status === 'queued' || x.smooth_status === 'processing');
   let libraryPlayback = [];
@@ -137,6 +137,7 @@
         <label><input id="selectAllMedia" type="checkbox" onchange="toggleAllMedia(this.checked)"> 全选</label>
         <button id="batchDownloadBtn" class="ghost" onclick="pDownloadSelected()" disabled>${icon('download')} 另存到本机 (<span>0</span>)</button>
         <button id="deleteSelectedBtn" class="danger" onclick="deleteSelectedMedia()" disabled>${icon('x')} 删除选中 (<span>0</span>)</button>
+        <button class="ghost" id="refreshCoversButton" onclick="pRefreshCovers(this)">同步 TG 封面</button>
         <button class="ghost p-clear-btn" onclick="clearAllMedia()" title="清空媒体库">${icon('refresh')} 清空</button>
       </div>
       <div id="mediaGrid" class="media-grid"></div>`;
@@ -157,6 +158,22 @@
       ? xs.map((x) => mediaCard(x)).join('')
       : `<div class="empty-state" style="grid-column:1/-1"><h3>没有找到视频</h3><p>尝试换一个关键词，或先去频道下载视频。</p><button onclick="go('channels')">浏览频道</button></div>`;
     updateMediaSelection();
+  };
+
+  window.pRefreshCovers = async function (button) {
+    button.disabled = true;
+    try {
+      let state = await api('/media/covers/refresh', { method: 'POST' });
+      while (state.status === 'running') {
+        button.textContent = `同步封面 ${state.done} / ${state.total}`;
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        state = await api('/media/covers/refresh');
+      }
+      if (state.status !== 'completed') throw new Error('任务已中断，请重新同步');
+      toast(`封面同步完成：更新 ${state.updated} 个，沿用 ${state.retained} 个 TG 原封面，${state.fallback} 个保留本地图，${state.unavailable} 个暂不可用`);
+      if (activePage === 'library') { await loadMedia(); document.querySelectorAll('#mediaGrid .media-poster img').forEach(image => { image.src += '&sync=' + Date.now(); }); }
+    } catch (error) { toast('封面同步未完成：' + error.message); }
+    finally { button.disabled = false; button.textContent = '同步 TG 封面'; }
   };
 
   window.updateMediaSelection = function () {
@@ -265,7 +282,7 @@
         <button class="ctl" id="playerClose" data-lock-disable type="button" aria-label="关闭播放器">${icon('x')}</button>
       </div>
       <div class="player-stage" id="playerStage">
-        <video id="player" playsinline webkit-playsinline preload="auto" poster="${x.thumb_path ? thumbUrl(x) : ''}"></video>
+        <video id="player" playsinline webkit-playsinline preload="auto" poster="${thumbUrl(x)}"></video>
         <div class="player-spinner" id="playerSpinner"></div>
         <div class="seek-preview" id="seekPreview" hidden><div class="seek-frame" role="img" aria-label="目标时间附近的画面预览" hidden></div><b></b><small>松手后继续 · 横滑可精细定位</small></div>
         <div class="buffer-status" id="bufferStatus" hidden>正在准备原画…</div>
@@ -314,6 +331,7 @@
     const seek = $('#seekInput'), played = $('#seekPlayed'), buffered = $('#seekBuffer'), thumb = $('#seekThumb');
     const qualityButton = $('#qualityButton'), smoothButton = $('#smoothButton'), downloadButton = $('#downloadButton');
     let scrubber, queue;
+    const loading = attachPlayerBuffer({ video, node: buffer, spinner });
     const shell = $('#playerShell');
     const controls = attachPlayerControls({ shell, stage, video, scrubbing: () => scrubber?.dragging(), interacting: () => queue?.isOpen() });
     const locker = attachPlayerLock({ shell, button: $('#lockButton'), changed: () => controls.show(), notice: toast });
@@ -341,7 +359,6 @@
       }
       buffered.style.width = `${pct(end, d)}%`;
     };
-    const showSpinner = on => spinner.classList.toggle('show', on);
     const error = message => { $('#playerError').hidden = false; $('#playerError').textContent = message; };
     const updateQuality = () => {
       qualityButton.textContent = quality === 'smooth' ? '480P 流畅' : '原画';
@@ -356,8 +373,7 @@
       restorePosition = at; resumeOnReady = resume;
       hls?.destroy(); hls = null;
       video.pause(); video.removeAttribute('src'); video.load();
-      showSpinner(true); buffer.hidden = false;
-      buffer.textContent = quality === 'original' ? '正在准备原画…' : '正在准备流畅版…';
+      loading.reset(at);
       const original = quality === 'original' && !direct && playback.original.type === 'hls';
       const url = original ? playback.original.url : `/api/media/${id}/stream?quality=${quality}`;
       const agent = navigator.userAgent;
@@ -366,6 +382,7 @@
         hls = new Hls({ autoStartLoad: false, startPosition: at, enableWorker: true, progressive: true,
           maxBufferLength: 16, maxMaxBufferLength: 32, maxBufferSize: 24 * 1024 * 1024, backBufferLength: 30 });
         const instance = hls;
+        loading.bind(instance, Hls.Events);
         instance.on(Hls.Events.MEDIA_ATTACHED, () => { if (run === sourceRun) instance.loadSource(url); });
         instance.on(Hls.Events.MANIFEST_PARSED, () => { if (run === sourceRun) instance.startLoad(at); });
         instance.on(Hls.Events.ERROR, (_event, data) => {
@@ -439,13 +456,7 @@
       }
     });
     video.addEventListener('progress', paint);
-    video.addEventListener('waiting', () => {
-      if (closed) return;
-      showSpinner(true); buffer.hidden = false;
-      buffer.textContent = quality === 'original' ? '原画缓冲中 · 保持原始画质' : '正在缓冲…';
-    });
-    const ready = () => { if (!closed) { showSpinner(false); buffer.hidden = true; } };
-    video.addEventListener('canplay', ready);
+    const ready = () => { if (!closed) loading.hide(); };
     const syncPlayButton = () => {
       const playing = !video.paused && !video.ended;
       playToggle.innerHTML = icon(playing ? 'pause' : 'play');
@@ -453,7 +464,7 @@
       playToggle.title = playing ? '暂停' : '播放';
     };
     video.addEventListener('play', syncPlayButton);
-    video.addEventListener('playing', ready);
+
     video.addEventListener('pause', syncPlayButton);
     video.addEventListener('ended', syncPlayButton);
     video.addEventListener('error', () => {
@@ -520,7 +531,7 @@
     const backdrop = event => { if (event.target.id === 'modal' && !locker.isLocked()) close(); };
     const close = () => {
       if (closed) return;
-      closed = true; sourceRun++; episodeRequest++; clearInterval(smoothTimer); queue.destroy(); locker.destroy(); controls.destroy(); scrubber.destroy(); storyboard.destroy();
+      closed = true; sourceRun++; episodeRequest++; clearInterval(smoothTimer); queue.destroy(); locker.destroy(); controls.destroy(); scrubber.destroy(); storyboard.destroy(); loading.destroy();
       try { localStorage.setItem('tvm-pos-' + id, String(restorePosition ?? video.currentTime)); } catch {}
       hls?.destroy(); hls = null; video.pause(); video.removeAttribute('src'); video.load();
       document.removeEventListener('keydown', keyHandler); $('#modal').removeEventListener('click', backdrop);

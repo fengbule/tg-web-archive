@@ -19,6 +19,8 @@ with TestClient(app) as c:
     c.portal.call(transcoder.stop)
     assert c.get('/health').status_code==200
     assert c.get('/api/dashboard').status_code==401
+    assert c.get('/api/media/covers/refresh').status_code==401
+    assert c.post('/api/media/covers/refresh').status_code==401
     assert c.get('/api/media/1/playback').status_code==401
     assert c.get('/api/media/1/hls/v2/index.m3u8').status_code==401
     assert c.get('/api/telegram/qr/status').status_code==401

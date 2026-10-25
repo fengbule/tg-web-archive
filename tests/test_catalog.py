@@ -69,6 +69,38 @@ def test_custom_tg_cover_wins_over_frame_and_largest_static_is_selected(tmp_path
         path=asyncio.run(svc.thumbnail(10,20));assert path!=frame and calls==[(photo,'x')]
         assert path.with_suffix('.source').read_text()=='telegram-custom'
         assert asyncio.run(svc.thumbnail(10,20))==path and len(calls)==1
+        assert db.one('SELECT thumb_path FROM media')['thumb_path']==str(path)
+        assert frame.is_file(),'the extracted fallback must remain available for rollback'
+    finally:db.close()
+
+
+def test_forced_cover_refresh_bypasses_old_message_and_image_cache(tmp_path):
+    db=Database(tmp_path/'db');db.init();svc=TelegramManager(tmp_path,tmp_path/'thumbs',db,Fernet(Fernet.generate_key())).service()
+    doc=SimpleNamespace(thumbs=[PhotoSize('m',320,180,100)])
+    svc.video_messages[(10,20)]=SimpleNamespace(video=doc,media=SimpleNamespace(video_cover=None))
+    new_photo=SimpleNamespace(sizes=[PhotoSize('x',1280,720,300)])
+    class Client:
+        calls=0;offline=False
+        async def get_entity(self,id):return id
+        async def get_messages(self,entity,ids):
+            self.calls+=1
+            if self.offline:raise ConnectionError('offline')
+            return SimpleNamespace(video=doc,media=SimpleNamespace(video_cover=new_photo))
+        async def download_media(self,source,file,thumb):
+            Image.new('RGB',(128,72),'green' if source is new_photo else 'red').save(file,format='JPEG');return file
+    client=Client()
+    async def get_client():return client
+    svc.get_client=get_client
+    try:
+        path=asyncio.run(svc.thumbnail(10,20));old=path.read_bytes()
+        assert svc.thumbnail_origin(path)=='telegram-thumbnail' and client.calls==0
+        assert asyncio.run(svc.thumbnail(10,20,refresh=True))==path
+        assert path.read_bytes()!=old and svc.thumbnail_origin(path)=='telegram-custom' and client.calls==1
+        import os,time
+        os.utime(path,(time.time()-90000,time.time()-90000))
+        asyncio.run(svc.thumbnail(10,20));assert client.calls==2,'daily revalidation must fetch the current message'
+        latest=path.read_bytes();client.offline=True
+        assert asyncio.run(svc.thumbnail(10,20,refresh=True))==path and path.read_bytes()==latest
     finally:db.close()
 
 def test_invalid_custom_cover_uses_static_document_and_missing_source_keeps_frame(tmp_path):

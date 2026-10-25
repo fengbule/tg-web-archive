@@ -22,7 +22,7 @@
       const query = search.value.trim().toLocaleLowerCase();
       const visible = items.filter(item => !query || (mediaPresentation.title(item)+' '+item.file_name).toLocaleLowerCase().includes(query));
       list.innerHTML = ready ? visible.slice(0, limit).map(item => `<button type="button" class="episode-item ${Number(item.id) === Number(current.id) ? 'is-current' : ''}" data-episode-id="${Number(item.id)}" ${Number(item.id) === Number(current.id) ? 'aria-current="true"' : ''}>
-        <span class="episode-cover">${item.thumb_path ? `<img src="/api/media/${Number(item.id)}/thumbnail" loading="lazy" alt="">` : icon('film')}</span>
+        <span class="episode-cover">${item.thumb_path ? `<img src="/api/media/${Number(item.id)}/thumbnail?v=3" loading="lazy" alt="">` : icon('film')}</span>
         <span class="episode-copy"><b>${escape(mediaPresentation.title(item))}</b><small>${Number(item.id) === Number(pending) ? '正在切换…' : Number(item.id) === Number(current.id) ? '正在播放' : duration(item.duration)}</small></span>${Number(item.id) === Number(current.id) ? icon('play') : ''}</button>`).join('') : '';
       shell.querySelector('#episodeEmpty').hidden = !ready || visible.length > 0;
       shell.querySelector('#episodeMore').hidden = visible.length <= limit;
