@@ -152,5 +152,5 @@ def safe_variant_path(source: Path, suffix: str) -> Path:
 
 
 def remove_media_variants(path: Path) -> None:
-    for suffix in (".smooth.mp4", ".smooth.tmp.mp4", ".faststart.tmp.mp4"):
+    for suffix in (".smooth.mp4", ".smooth.tmp.mp4", ".faststart.tmp.mp4", ".enhanced.mp4", ".enhanced.tmp.mp4"):
         safe_variant_path(path, suffix).unlink(missing_ok=True)

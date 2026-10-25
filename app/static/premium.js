@@ -38,6 +38,7 @@
     if (x.width && x.height) flags.push(`<span class="flag">${x.width}×${x.height}</span>`);
     if (ready) flags.push('<span class="flag quality">480P 流畅</span>');
     else if (busy) flags.push(`<span class="flag optimizing">优化 ${progress}%</span>`);
+    if (enhancementReady(x)) flags.push('<span class="flag quality">轻度增强</span>');
     const selected = selectedMedia.has(Number(x.id));
     return `<article class="card media-card-v2" data-media-id="${x.id}">
       <div class="media-poster">
@@ -203,7 +204,7 @@
   };
 
   window.pDownload = function (id, quality) {
-    const q = quality === 'smooth' ? '&quality=smooth' : '';
+    const q = ['smooth','enhanced'].includes(quality) ? '&quality=' + quality : '';
     const a = document.createElement('a');
     a.href = `/api/media/${id}/stream?download=true${q}`;
     a.download = '';
@@ -223,6 +224,7 @@
         <button onclick="closeModal();play(${id},'original')">${icon('play')} 原画播放</button>
         <button class="ghost" onclick="pDownload(${id})">${icon('download')} 另存原画到手机 / 电脑</button>
         ${ready ? `<button class="ghost" onclick="closeModal();play(${id},'smooth')">${icon('zap')} 播放 480P 流畅版</button><button class="ghost" onclick="pDownload(${id},'smooth')">${icon('download')} 下载 480P</button>` : busy ? `<button class="ghost" disabled>${icon('zap')} 流畅版生成中 ${Math.round(x.smooth_progress || 0)}%</button>` : `<button class="ghost" onclick="pStartSmooth(${id},this)">${icon('zap')} 生成 480P 流畅版</button>`}
+        ${enhancementReady(x) ? `<button class="ghost" onclick="closeModal();play(${id},'enhanced')">${icon('zap')} 播放轻度增强版</button><button class="ghost" onclick="pDownload(${id},'enhanced')">${icon('download')} 下载增强版</button><button class="ghost" onclick="pRemoveEnhanced(${id})">仅移除增强版</button>` : `<button class="ghost" onclick="pStartEnhanced(${id},this)">${['queued','processing'].includes(x.enhanced_status) ? '查看增强进度' : '生成轻度增强版'}</button>`}
         <button class="ghost" onclick="closeModal();sendMediaToSaved(${id})">${icon('star')} 上传收藏夹</button>
         <button class="ghost" onclick="closeModal();renameMedia(${id},'${encodeURIComponent(x.file_name)}')">${icon('film')} 重命名</button>
         <button class="danger" style="grid-column:1/-1" onclick="closeModal();deleteMedia(${id})">${icon('x')} 永久删除</button>
@@ -266,7 +268,8 @@
     ]);
     if (request !== playerRequest) return;
     let smooth = smoothReady(x);
-    let quality = preferred === 'smooth' && smooth ? 'smooth' : 'original';
+    let enhanced = enhancementReady(x);
+    let quality = preferred === 'enhanced' && enhanced ? 'enhanced' : preferred === 'smooth' && smooth ? 'smooth' : 'original';
     let hls = null, direct = false, sourceRun = 0, closed = false;
     let restorePosition = 0, resumeOnReady = true, firstLoad = true;
     let smoothTimer = null, saveAt = 0, speed = 1, episodeRequest = 0;
@@ -278,7 +281,7 @@
         <div class="player-title"><span class="player-eyebrow">NOW PLAYING</span><h3 title="${esc(x.file_name)}">${esc(mediaPresentation.title(x))}</h3><p>${esc(x.channel_title)} · ${x.width} × ${x.height} · ${fmt(x.size)}</p></div>
         <span class="lock-status" id="lockStatus" hidden></span>
         ${videoFavorites.button(x, 'ctl', 'playerFavorite')}
-        <button class="quality-btn" id="qualityButton" data-lock-disable type="button" ${smooth ? '' : 'disabled'} title="切换原画 / 流畅版">${quality === 'smooth' ? '480P 流畅' : '原画'}</button>
+        <button class="quality-btn" id="qualityButton" data-lock-disable type="button" ${smooth || enhanced ? '' : 'disabled'} title="切换可用画质">${quality === 'enhanced' ? '轻度增强' : quality === 'smooth' ? '480P 流畅' : '原画'}</button>
         <button class="ctl" id="playerClose" data-lock-disable type="button" aria-label="关闭播放器">${icon('x')}</button>
       </div>
       <div class="player-stage" id="playerStage">
@@ -324,12 +327,14 @@
         <button class="ghost" id="episodeRetry" type="button" hidden>重新读取列表</button><button class="ghost" id="episodeMore" type="button" hidden>显示更多</button>
       </section>
       <div class="player-foot"><div class="player-meta"><span class="original-pill" id="metaQuality">${quality === 'smooth' ? '480P 流畅' : '原画 · 原始编码'}</span><span id="metaBitrate"></span><span>音画同步播放</span></div><div class="player-actions"><button class="ghost" id="smoothButton" type="button">${smooth ? '切换流畅版' : '生成流畅版'}</button><a id="originalDownloadLink" href="/api/media/${id}/stream?download=true" download>${icon('download')} 下载原文件</a></div></div>
+      <div class="enhancement-tools" data-lock-disable><div class="enhancement-copy"><b>轻度增强</b><span id="enhanceStatus" role="status">改善清晰度 · 原画保留</span></div><div class="enhancement-actions"><button class="ghost" id="enhanceButton" type="button">生成轻度增强版</button><button class="ghost" id="enhanceCancel" type="button" hidden>取消生成</button><a class="ghost" id="enhanceDownload" download hidden>下载增强版</a></div></div>
       <div class="player-error" id="playerError" role="status" hidden></div>
     </div></div>`, true);
     const video = $('#player'), stage = $('#playerStage'), spinner = $('#playerSpinner');
     const buffer = $('#bufferStatus'), playToggle = $('#playToggle');
     const seek = $('#seekInput'), played = $('#seekPlayed'), buffered = $('#seekBuffer'), thumb = $('#seekThumb');
     const qualityButton = $('#qualityButton'), smoothButton = $('#smoothButton'), downloadButton = $('#downloadButton');
+    let enhancement;
     let scrubber, queue;
     const loading = attachPlayerBuffer({ video, node: buffer, spinner });
     const shell = $('#playerShell');
@@ -361,12 +366,13 @@
     };
     const error = message => { $('#playerError').hidden = false; $('#playerError').textContent = message; };
     const updateQuality = () => {
-      qualityButton.textContent = quality === 'smooth' ? '480P 流畅' : '原画';
-      $('#metaQuality').textContent = quality === 'smooth' ? '480P 流畅' : '原画 · 原始编码';
-      const size = quality === 'smooth' ? x.smooth_size : x.size;
+      qualityButton.textContent = quality === 'enhanced' ? '轻度增强' : quality === 'smooth' ? '480P 流畅' : '原画';
+      $('#metaQuality').textContent = quality === 'enhanced' ? '轻度增强 · 原始分辨率' : quality === 'smooth' ? '480P 流畅' : '原画 · 原始编码';
+      const size = quality === 'enhanced' ? x.enhanced_size : quality === 'smooth' ? x.smooth_size : x.size;
       $('#metaBitrate').textContent = size && x.duration ? (size * 8 / x.duration / 1e6).toFixed(2) + ' Mbps' : '';
-      downloadButton.href = `/api/media/${id}/stream?download=true${quality === 'smooth' ? '&quality=smooth' : ''}`;
-      downloadButton.title = quality === 'smooth' ? '下载流畅版到本机' : '下载原画到本机';
+      downloadButton.href = `/api/media/${id}/stream?download=true${quality !== 'original' ? '&quality=' + quality : ''}`;
+      downloadButton.title = quality === 'enhanced' ? '下载增强版到本机' : quality === 'smooth' ? '下载流畅版到本机' : '下载原画到本机';
+      enhancement?.paint();
     };
     const mount = (at, resume) => {
       const run = ++sourceRun;
@@ -411,14 +417,15 @@
         storyboard.destroy();
         id = Number(target); x = item; playback = info;
         shell.dataset.mediaId = String(id);
-        smooth = smoothReady(x); quality = 'original'; direct = false; firstLoad = true; saveAt = 0;
+        smooth = smoothReady(x); enhanced = enhancementReady(x); quality = 'original'; direct = false; firstLoad = true; saveAt = 0;
+        enhancement?.destroy(); setupEnhancement();
         shell.querySelector('.player-title h3').textContent = mediaPresentation.title(x);
         shell.querySelector('.player-title h3').title = x.file_name;
         $('#playerFavorite').outerHTML = videoFavorites.button(x, 'ctl', 'playerFavorite');
         shell.querySelector('.player-title p').textContent = `${x.channel_title} · ${x.width} × ${x.height} · ${fmt(x.size)}`;
         $('#totalTime').textContent = duration(x.duration);
         video.poster = thumbUrl(x);
-        qualityButton.disabled = !smooth;
+        qualityButton.disabled = !smooth && !enhanced;
         smoothButton.disabled = false; smoothButton.textContent = smooth ? '切换流畅版' : '生成流畅版';
         $('#originalDownloadLink').href = `/api/media/${id}/stream?download=true`;
         $('#playerError').hidden = true; $('#seekPreview').hidden = true;
@@ -470,7 +477,7 @@
     video.addEventListener('error', () => {
       if (closed || !video.error) return;
       if (quality === 'original' && hls && !direct) { direct = true; mount(restorePosition ?? video.currentTime, restorePosition !== null ? resumeOnReady : !video.paused); return; }
-      ready(); error('原画暂时无法播放。可重试、下载原文件，或手动切换流畅版；画质不会自动降低。');
+      ready(); error(quality === 'enhanced' ? '增强版暂时无法播放，可切回原画，或在视频菜单移除后重新生成。' : '原画暂时无法播放。可重试、下载原文件，或手动切换流畅版；画质不会自动降低。');
     });
     const toggle = () => { if (video.paused) video.play().catch(() => {}); else video.pause(); };
     playToggle.onclick = toggle;
@@ -496,15 +503,27 @@
       catch { toast('当前浏览器不支持全屏'); }
     };
     const setQuality = next => {
-      if (closed || next === quality || (next === 'smooth' && !smooth)) return;
+      if (closed || !['original','smooth','enhanced'].includes(next) || next === quality || (next === 'smooth' && !smooth) || (next === 'enhanced' && !enhanced)) return;
       const at = restorePosition ?? video.currentTime;
       const resume = restorePosition !== null ? resumeOnReady : !video.paused;
       quality = next; $('#playerError').hidden = true;
       mount(at, resume);
-      toast(next === 'original' ? '已切回原画' : '已切换流畅版');
+      toast(next === 'original' ? '已切回原画' : next === 'enhanced' ? '已切换轻度增强版' : '已切换流畅版');
     };
     window.pSetQuality = setQuality;
-    qualityButton.onclick = () => setQuality(quality === 'original' ? 'smooth' : 'original');
+    qualityButton.onclick = () => {
+      const choices = ['original', ...(enhanced ? ['enhanced'] : []), ...(smooth ? ['smooth'] : [])];
+      setQuality(choices[(choices.indexOf(quality) + 1) % choices.length]);
+    };
+    function setupEnhancement() {
+      enhancement = attachEnhancementControls({shell, media: () => x, quality: () => quality, select: setQuality,
+        changed(state) {
+          enhanced = state.ready; x.enhanced_size = state.size; x.enhanced_status = state.status;
+          qualityButton.disabled = !smooth && !enhanced;
+          if (quality === 'enhanced' && !enhanced) setQuality('original');
+        }});
+    }
+    setupEnhancement();
     smoothButton.onclick = async () => {
       if (smooth) { setQuality('smooth'); return; }
       const smoothId = id;
@@ -531,7 +550,7 @@
     const backdrop = event => { if (event.target.id === 'modal' && !locker.isLocked()) close(); };
     const close = () => {
       if (closed) return;
-      closed = true; sourceRun++; episodeRequest++; clearInterval(smoothTimer); queue.destroy(); locker.destroy(); controls.destroy(); scrubber.destroy(); storyboard.destroy(); loading.destroy();
+      closed = true; sourceRun++; episodeRequest++; clearInterval(smoothTimer); enhancement?.destroy(); queue.destroy(); locker.destroy(); controls.destroy(); scrubber.destroy(); storyboard.destroy(); loading.destroy();
       try { localStorage.setItem('tvm-pos-' + id, String(restorePosition ?? video.currentTime)); } catch {}
       hls?.destroy(); hls = null; video.pause(); video.removeAttribute('src'); video.load();
       document.removeEventListener('keydown', keyHandler); $('#modal').removeEventListener('click', backdrop);

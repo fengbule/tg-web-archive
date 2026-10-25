@@ -432,11 +432,13 @@ def safe_unlink(value):
         size=p.stat().st_size; p.unlink(missing_ok=True); return size
     except OSError: return 0
 def delete_media_record(x):
-    if transcoder.current_id==int(x['id']): raise HTTPException(409,'视频正在优化，请等待完成或先取消流畅版生成')
+    if transcoder.current_id==int(x['id']): raise HTTPException(409,'视频正在优化，请等待完成或先取消生成任务')
     try: transcoder.cancel_smooth(int(x['id']))
     except Exception: pass
+    transcoder.cancel_enhanced(int(x['id']))
     removed=safe_unlink(x.get('file_path')); safe_unlink(x.get('thumb_path'))
     if x.get('smooth_path'): safe_unlink(x['smooth_path'])
+    if x.get('enhanced_path'): safe_unlink(x['enhanced_path'])
     try: transcoder.delete_variants(Path(x.get('file_path') or ''), int(x['id']))
     except Exception: pass
     if x.get('download_id'): safe_unlink(str(ROOT/'temp'/f"{x['download_id']}.part"))
@@ -454,7 +456,7 @@ def bulk_delete_media(b:BulkDelete):
     if not b.all and not b.ids: raise HTTPException(400,'请选择要删除的视频')
     ids=list(dict.fromkeys(b.ids))
     rows=db.all('SELECT * FROM media') if b.all else db.all('SELECT * FROM media WHERE id IN ('+','.join('?' for _ in ids)+')',tuple(ids))
-    if any(x['id']==transcoder.current_id for x in rows): raise HTTPException(409,'选中的视频正在优化，请等待完成或先取消流畅版生成')
+    if any(x['id']==transcoder.current_id for x in rows): raise HTTPException(409,'选中的视频正在优化，请等待完成或先取消生成任务')
     removed=sum(delete_media_record(x) for x in rows)
     return {'deleted':len(rows),'bytes':removed}
 @app.get('/api/media/download-zip')
@@ -503,6 +505,30 @@ def remove_smooth(id:int):
     transcoder.cancel_smooth(id)
     if x.get('smooth_path'): safe_unlink(x['smooth_path'])
     db.execute("UPDATE media SET smooth_path='',smooth_status='idle',smooth_progress=0,smooth_size=0,smooth_error='已移除流畅版' WHERE id=?",(id,))
+    return {'ok':True}
+@app.get('/api/media/{id}/enhanced')
+def enhanced_status(id:int):
+    x,_=media_row(id)
+    path=Path(x.get('enhanced_path') or '').resolve()
+    ready=bool(x['enhanced_status']=='ready' and MEDIA_ROOT in path.parents and path.is_file())
+    status='idle' if x['enhanced_status']=='ready' and not ready else x['enhanced_status']
+    waiting=status=='queued' and bool(db.one("SELECT 1 FROM downloads WHERE status IN ('queued','downloading','pausing','retrying') LIMIT 1"))
+    return {'id':id,'status':status,'ready':ready,'progress':float(x['enhanced_progress']) if status!='idle' else 0,
+            'size':int(x['enhanced_size']) if ready else 0,'error':x['enhanced_error'],'waiting_for_downloads':waiting,
+            'recipe':x['enhanced_recipe'],'quality':'enhanced'}
+@app.post('/api/media/{id}/enhanced')
+def start_enhanced(id:int):
+    media_row(id)
+    try: transcoder.enqueue_enhanced(id)
+    except ValueError as exc: raise HTTPException(409,str(exc)) from None
+    return enhanced_status(id)
+@app.delete('/api/media/{id}/enhanced')
+def remove_enhanced(id:int):
+    with db.lock:
+        x,_=media_row(id)
+        transcoder.cancel_enhanced(id)
+        if x.get('enhanced_path'): safe_unlink(x['enhanced_path'])
+        db.execute("UPDATE media SET enhanced_path='',enhanced_size=0,enhanced_recipe='',enhanced_error='已取消或移除增强版' WHERE id=?", (id,))
     return {'ok':True}
 @app.get('/api/media/{id}')
 def media_detail(id:int): return favorites.mark([media_row(id)[0]])[0]
@@ -570,6 +596,11 @@ def thumbnail_response(path,request):
 @app.get('/api/media/{id}/stream')
 def stream(id:int,request:Request,download:bool=False,quality:str='original'):
     x,p=media_row(id); filename=x['file_name']; mime=x['mime']
+    if quality not in ('original','smooth','enhanced'): raise HTTPException(400,'不支持的画质选项')
+    if quality=='enhanced':
+        p=Path(x.get('enhanced_path') or '').resolve()
+        if x['enhanced_status']!='ready' or MEDIA_ROOT not in p.parents or not p.is_file(): raise HTTPException(409,'增强版尚未生成完成')
+        mime='video/mp4'; filename=Path(filename).stem+' - 轻度增强.mp4'
     if quality=='smooth':
         smooth=Path(x.get('smooth_path') or '')
         if x.get('smooth_status')!='ready' or not smooth.is_file(): raise HTTPException(409,'流畅版尚未生成完成')
@@ -623,6 +654,15 @@ def rename(id:int,b:Rename):
             try:
                 old_smooth.replace(new_smooth)
                 db.execute('UPDATE media SET smooth_path=? WHERE id=?',(str(new_smooth),id))
+            except OSError: pass
+    enhanced=x.get('enhanced_path') or ''
+    if enhanced:
+        old_enhanced=Path(enhanced)
+        if old_enhanced.is_file():
+            new_enhanced=new.with_name(new.stem+'.enhanced.mp4')
+            try:
+                old_enhanced.replace(new_enhanced)
+                db.execute('UPDATE media SET enhanced_path=? WHERE id=?',(str(new_enhanced),id))
             except OSError: pass
     db.execute('UPDATE media SET file_name=?,file_path=? WHERE id=?',(name,str(new),id)); return {'ok':True}
 @app.delete('/api/media/{id}')
