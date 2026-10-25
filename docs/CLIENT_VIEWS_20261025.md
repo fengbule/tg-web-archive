@@ -40,7 +40,7 @@
 - VPS：`/root/backups/tg-web-archive-client-view-20261025T042750Z`；镜像 `tg-web-archive-vps-rollback:client-view-20261025`。
 - InstaBox：`/data/workspace/tg-web-archive/backups/tg-web-archive-client-view-20261025T042741Z`；镜像 `tg-web-archive-app:rollback-client-view-20261025`。
 
-备份目录 700，配置和后台部署日志 600。真实凭据、数据库、会话及日志只在受保护位置，不进入 Git。部署记录与账号/文件保留验收在上线后补记。
+备份目录 700，配置和后台部署日志 600。真实凭据、数据库、会话及日志只在受保护位置，不进入 Git。
 
 VPS 在独立项目内更新：
 
@@ -63,3 +63,20 @@ InstaBox：在 `/data/workspace/tg-web-archive` 中 `git pull --ff-only`，导�
 确认工作树干净，检出 `d297f3d`。VPS 将保留镜像重新标记为 `telegram-video-manager-app`，用上述独立 Compose 项目 `up -d --no-deps --force-recreate --no-build --wait app`；InstaBox 使用 `IMAGE_TAG=rollback-client-view-20261025` 加 `--no-build` 更新 app，成功后同步 `.env` 标签。重启各自 nginx、核验健康与原登录。
 
 本次只有静态界面变更，回滚不需要恢复数据库。禁止 `down -v` 或删除账号、媒体、下载临时文件和数据卷。Akile、Komari、1Panel、外部保活以及同机其他项目均不在操作范围。既有账号备份/导出方法继续见 [账号迁移说明](THEME_BACKUP_PREVIEW_20261023.md)。
+
+## 2026-10-25 上线验收
+
+两台应用已运行 `06f9b07bb72d`，各自后台构建/更新任务成功，健康检查通过；容器内静态文件与仓库一致。8080、8084 HTTPS 中转和 8081 原生入口已核验新资源、健康、原账号授权及未登录下载 API 拒绝访问。公网实际 VPS 频道挑选页、原画播放、播放中切换布局保持视频实例/倍速/音量、原文件附件的 Range 响应通过；两台应用的模式选择、刷新偏好和手机菜单通过。生产验证只使用读取请求，未新增下载、上传或收藏。
+
+6 项频道/收藏 Python 测试通过；客户端模式、频道挑选、视频收藏、播放器控件、方向锁/选集、原画播放六组无头 Chromium 回归通过。新模式测试覆盖 40 组主题/宽度/模式组合和视图选择面板边界，隔离假 Telegram 环境确认服务器入队并实际写入视频、浏览器另存附件成功。已目检手机明暗、平板和电脑截图，一次性容器已移除。
+
+| 保留检查 | VPS | InstaBox 原生 |
+| --- | --- | --- |
+| 已授权账号 | 1 | 1 |
+| 原媒体 / 下载记录 / 发送记录 | 62 / 62 / 1 | 0 / 0 / 0 |
+| 原视频收藏 | 4 | 0 |
+| 原记录稳定字段与媒体文件路径/大小 | 通过 | 通过（无媒体） |
+| 密码/API 配置、Session 授权密钥、环境（除 IMAGE_TAG） | 指纹一致 | 指纹一致 |
+| SQLite quick_check | ok | ok |
+
+Akile、Komari、1Panel、8084 中转及同机 birth 容器的身份/启动时间或进程指纹保持。InstaBox 原生没有归档视频，因此该实例验收的是空媒体状态；实际视频播放在 VPS 及隔离环境验证。重启后 VPS 授权查询曾短暂返回未知，重试及独立状态检查确认原账号仍已授权；未改凭据和网络参数。待观察事项为真实 iOS/Android 设备的长时间滚动、横屏键盘及系统下载面板行为。
