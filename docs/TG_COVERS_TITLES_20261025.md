@@ -24,6 +24,16 @@
 
 验证包括 `test_catalog.py` 的原封面优先、最大静态图选择、动画排除、坏图片回退、离线回退、并发去重，以及 `test_favorites.py` 的说明保存/搜索/重启保留。浏览器入口 `tests/tg_cover_title_ui.mjs` 在隔离假 Telegram 容器中比较真实 JPEG 字节，确认频道与媒体库使用同一原封面，检查标题、展开说明、文件名不变、收藏/搜索/播放器标题、文本安全与 320/390/768/1440 明暗主题截图。不得将一次性测试数据目录替换成生产卷。
 
-本次更新前源码为 `ee5ed77`、应用为 `06f9b07`。更新前一致性备份：VPS `/root/backups/tg-web-archive-tg-cover-20261025T100529Z`，镜像 `tg-web-archive-vps-rollback:tg-cover-20261025`；InstaBox `/data/workspace/tg-web-archive/backups/tg-web-archive-tg-cover-20261025T101439Z`，镜像 `tg-web-archive-app:rollback-tg-cover-20261025`。配置 600，备份目录 700。实际部署版本与公网验收在上线后补记。
+本次更新前源码为 `ee5ed77`、应用为 `06f9b07`。更新前一致性备份：VPS `/root/backups/tg-web-archive-tg-cover-20261025T100529Z`，镜像 `tg-web-archive-vps-rollback:tg-cover-20261025`；InstaBox `/data/workspace/tg-web-archive/backups/tg-web-archive-tg-cover-20261025T101439Z`，镜像 `tg-web-archive-app:rollback-tg-cover-20261025`。配置 600，备份目录 700。回滚切回 `ee5ed77`，VPS 将回滚镜像重新标记为 `telegram-video-manager-app`，InstaBox 使用 `IMAGE_TAG=rollback-tg-cover-20261025`；各自 Compose 项目使用 `--no-build` 只更新 app，再重启自己的 nginx 和检查健康，不恢复数据库、不删除新增列。
 
 上线前 40 项 Python 回归、原 API/收藏 API 两组冒烟测试、新原封面/标题与现有视图、频道、收藏、播放器控件、方向锁/选集、原画播放共七组无头浏览器测试通过。新封面测试使用独立的假 TG 封面 JPEG 和本地抽帧，验证实际返回字节一致且源类型正确；截图已目检。
+
+## 2026-10-25 上线验收
+
+VPS 与 InstaBox 原生应用均已运行 `7ca8165eaacd`。后台构建和健康检查通过，运行中的静态资源及 `main.py`、`db.py`、`favorites.py`、`telegram_service.py` 与仓库一致。8080、8084 HTTPS 中转和 8081 原生入口的新资源、健康、原账号授权及未登录 API 拒绝通过。
+
+公网抽查 3 个已有真实下载视频，响应源均为 `telegram-thumbnail`，返回有效 JPEG，频道与媒体库字节完全相同；TG 自定义封面优先路径在隔离环境与单元测试验证，此次公网样本未包含自定义封面。实际 VPS 频道浏览、原画播放、播放器消息标题、视图切换保持播放实例/倍速/音量、原文件附件 Range 通过。生产验收未创建收藏、下载或上传任务，仅增加按需图片缓存。
+
+VPS 原 1 个已授权账号、62 个视频、62 条下载、1 条发送记录、4 条收藏保留；InstaBox 原 1 个已授权账号和空媒体库保留。原媒体文件路径/大小及记录稳定字段（含已有说明）一致；密码/API 配置、Session 授权密钥、除 IMAGE_TAG 外环境指纹一致，SQLite quick_check=ok。Akile、Komari、1Panel、8084 中转和同机 birth 容器未重启。InstaBox 本次先等待平台启动冷却结束，再恢复已挂起实例，未修改保活配置。
+
+既有库中大部分媒体没有保存说明，继续使用原文件名，不凭空生成标题；本轮不批量改写这些记录。新说明随来源收藏和正常视频下载保存。原封面首次读取需要 TG 网络，失败时会回退并保留重试机会；真实 iOS/Android 长时间浏览仍需持续观察。一次性测试容器已移除，原文件和封面回退缓存保留。
