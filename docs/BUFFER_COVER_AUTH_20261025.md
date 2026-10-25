@@ -1,5 +1,7 @@
 # 定位加载进度、原封面同步与访问保护
 
+封面关联、缓存及真实图片验收已由 [TG 相册原封面修复](ALBUM_COVERS_20261025.md) 更新；本篇的加载进度与登录保护说明继续适用。
+
 拖动进度条、横滑定位和快进后，画面底部显示加载百分比及小进度条。HLS 使用**当前目标片段**的 `stats.loaded / stats.total`，片段接收完成但尚未解码时明确显示“片段已接收 · 正在解码”。原生播放器使用目标位置起最多 3 秒的连续 `video.buffered` 时长，标注已缓冲秒数；可播放事件到达后显示就绪并收起。百分比衡量本次定位所需的片段/缓冲，不是整个视频下载进度。新定位排除旧片段，切换集数/画质及关闭播放器会清理监听和定时器。没有新数据时数值不凭时间增加，弱网停住时不会假装已完成。依赖依据：[HLS LoaderStats](https://hlsjs.video-dev.org/api-docs/hls.js.loaderstats)、[浏览器媒体 progress 事件](https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/progress_event)。
 
 不增加第二个音视频播放器，不改变原画优先、音画同轨、拖动预览图、暂停/方向锁/选集行为，也不额外请求完整视频来统计字节。原生 Safari 的缓冲更新粒度由浏览器决定，百分比可能跳变；真实 iOS/Android 长时使用仍需观察。
