@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from pydantic import BaseModel, Field
 from .db import Database, now
-from .telegram_service import TelegramManager
+from .telegram_service import TelegramManager, TelegramAccountService
 from .downloader import Downloader
 from .outbox import OutboxSender
 from .transcoder import Transcoder
@@ -82,7 +82,7 @@ async def security(request:Request,call_next):
     if request.url.path.startswith('/api/media/') and request.url.path.endswith('/stream') and response.status_code in (200,206):
         response.headers['Cache-Control']='private, max-age=3600'
     elif request.url.path.startswith('/api/') and request.url.path.endswith('/thumbnail') and response.status_code==200:
-        response.headers['Cache-Control']='private, max-age=3600'
+        response.headers['Cache-Control']='private, max-age='+('60' if response.headers.get('X-Thumbnail-Source')=='local-frame' else '3600')
     else: response.headers['Cache-Control']='no-store' if request.url.path.startswith('/api/') else 'no-cache'
     return response
 
@@ -274,7 +274,7 @@ async def telegram_thumbnail(channel_id:int,message_id:int,account_id:int|None=N
     try: p=await service.thumbnail(channel_id,message_id)
     except TimeoutError: raise HTTPException(504,'封面读取超时，请点击重试') from None
     if not p: raise HTTPException(404,'该视频没有可用封面')
-    return FileResponse(p,media_type='image/jpeg',headers={'Cache-Control':'private, max-age=86400'})
+    return FileResponse(p,media_type='image/jpeg',headers={'Cache-Control':'private, max-age=86400','X-Thumbnail-Source':service.thumbnail_origin(p)})
 
 @app.get('/api/dialogs')
 async def dialogs(q:str='',limit:int=100):
@@ -355,7 +355,7 @@ def retry(id:int):
 @app.get('/api/media')
 def media(q:str='',channel_id:int|None=None,sort:str='time'):
     where=[]; args=[]
-    if q: where.append('(file_name LIKE ? OR channel_title LIKE ?)'); args += [f'%{q}%',f'%{q}%']
+    if q: where.append('(file_name LIKE ? OR channel_title LIKE ? OR caption LIKE ?)'); args += [f'%{q}%']*3
     if channel_id is not None: where.append('channel_id=?'); args.append(channel_id)
     order={'time':'downloaded_at DESC','name':'file_name COLLATE NOCASE','size':'size DESC'}.get(sort,'downloaded_at DESC')
     return favorites.mark(db.all('SELECT * FROM media'+((' WHERE '+' AND '.join(where)) if where else '')+' ORDER BY '+order+' LIMIT 1000',args))
@@ -372,6 +372,7 @@ class FavoriteCreate(BaseModel):
     width:int=Field(default=0,ge=0,le=100000)
     height:int=Field(default=0,ge=0,le=100000)
     has_thumbnail:bool=False
+    caption:str=Field(default='',max_length=4096)
 
 @app.get('/api/favorites')
 def list_favorites(q:str=Query(default='',max_length=200),account_id:int|None=None,
@@ -543,10 +544,13 @@ def original_hls(id:int,name:str):
         return Response(media_type=mime,headers=headers)
     return FileResponse(p,media_type=mime,headers=headers)
 @app.get('/api/media/{id}/thumbnail')
-def thumbnail(id:int):
-    x,_=media_row(id); p=Path(x['thumb_path']).resolve() if x['thumb_path'] else None
+async def thumbnail(id:int):
+    x,_=media_row(id)
+    try: p=await tg.service(x['account_id']).thumbnail(x['channel_id'],x['message_id'])
+    except Exception: p=Path(x['thumb_path']) if x['thumb_path'] else None
+    p=Path(p).resolve() if p else None
     if not p or ROOT not in p.parents or not p.is_file(): raise HTTPException(404,'无缩略图')
-    return FileResponse(p,media_type='image/jpeg')
+    return FileResponse(p,media_type='image/jpeg',headers={'X-Thumbnail-Source':TelegramAccountService.thumbnail_origin(p)})
 @app.get('/api/media/{id}/stream')
 def stream(id:int,request:Request,download:bool=False,quality:str='original'):
     x,p=media_row(id); filename=x['file_name']; mime=x['mime']

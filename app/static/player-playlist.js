@@ -14,16 +14,16 @@
       const at = position();
       previous.disabled = !ready || at <= 0;
       next.disabled = !ready || at < 0 || at >= items.length - 1;
-      previous.title = at > 0 ? items[at - 1].file_name : '已经是第一集';
-      next.title = at >= 0 && at < items.length - 1 ? items[at + 1].file_name : '已经是最后一集';
+      previous.title = at > 0 ? mediaPresentation.title(items[at - 1]) : '已经是第一集';
+      next.title = at >= 0 && at < items.length - 1 ? mediaPresentation.title(items[at + 1]) : '已经是最后一集';
       toggle.querySelector('span').textContent = ready ? `选集 ${at + 1}/${items.length}` : error ? '选集 · 重试' : '选集 · 读取中';
       description.textContent = ready ? `${contextIds.length ? '当前列表顺序' : '同频道 · 按名称顺序'} · ${items.length} 个已归档视频` : error ? '列表读取失败，点击重试' : '正在读取已归档视频…';
       shell.querySelector('#episodeRetry').hidden = !error;
       const query = search.value.trim().toLocaleLowerCase();
-      const visible = items.filter(item => !query || item.file_name.toLocaleLowerCase().includes(query));
+      const visible = items.filter(item => !query || (mediaPresentation.title(item)+' '+item.file_name).toLocaleLowerCase().includes(query));
       list.innerHTML = ready ? visible.slice(0, limit).map(item => `<button type="button" class="episode-item ${Number(item.id) === Number(current.id) ? 'is-current' : ''}" data-episode-id="${Number(item.id)}" ${Number(item.id) === Number(current.id) ? 'aria-current="true"' : ''}>
         <span class="episode-cover">${item.thumb_path ? `<img src="/api/media/${Number(item.id)}/thumbnail" loading="lazy" alt="">` : icon('film')}</span>
-        <span class="episode-copy"><b>${escape(item.file_name)}</b><small>${Number(item.id) === Number(pending) ? '正在切换…' : Number(item.id) === Number(current.id) ? '正在播放' : duration(item.duration)}</small></span>${Number(item.id) === Number(current.id) ? icon('play') : ''}</button>`).join('') : '';
+        <span class="episode-copy"><b>${escape(mediaPresentation.title(item))}</b><small>${Number(item.id) === Number(pending) ? '正在切换…' : Number(item.id) === Number(current.id) ? '正在播放' : duration(item.duration)}</small></span>${Number(item.id) === Number(current.id) ? icon('play') : ''}</button>`).join('') : '';
       shell.querySelector('#episodeEmpty').hidden = !ready || visible.length > 0;
       shell.querySelector('#episodeMore').hidden = visible.length <= limit;
     };

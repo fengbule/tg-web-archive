@@ -4,7 +4,7 @@ from collections import OrderedDict
 from telethon import TelegramClient
 from telethon import utils
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError, FloodWaitError, UnauthorizedError
-from telethon.tl.types import Channel, Chat, User
+from telethon.tl.types import Channel, Chat, User, PhotoSize, PhotoCachedSize, PhotoStrippedSize, PhotoSizeProgressive
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
 from telethon.tl.types import InputMessagesFilterVideo
@@ -19,6 +19,7 @@ class TelegramAccountService:
         self.db=db; self.cipher=cipher; self.client=None; self.phone=''; self.phone_code_hash=''; self.lock=asyncio.Lock(); self.channels_cache=[]; self.channels_cached_at=0; self.me_cache=None
         self.qr_login=QRLoginFlow(); self.ending_session=False
         self.video_messages=OrderedDict(); self.thumbnail_gate=asyncio.Semaphore(3); self.thumbnail_locks={}
+        self.thumbnail_backoff=OrderedDict()
     def _key(self,key): return key if self.account_id==1 else f'account:{self.account_id}:{key}'
     def _cfg(self,key):
         r=self.db.one('SELECT value FROM config WHERE key=?',(self._key(key),)); return r['value'] if r else None
@@ -124,7 +125,7 @@ class TelegramAccountService:
             name=getattr(fa,'file_name',None) or f'video_{m.id}.mp4'
             out.append({'message_id':m.id,'channel_id':int(channel_id),'channel_title':getattr(entity,'title',''),'file_name':name,
               'caption':m.message or '','date':m.date.isoformat(),'size':doc.size or 0,'duration':getattr(va,'duration',0) or 0,
-              'width':getattr(va,'w',0) or 0,'height':getattr(va,'h',0) or 0,'has_thumbnail':bool(getattr(doc,'thumbs',None))})
+              'width':getattr(va,'w',0) or 0,'height':getattr(va,'h',0) or 0,'has_thumbnail':bool(getattr(doc,'thumbs',None) or getattr(getattr(getattr(m,'media',None),'video_cover',None),'sizes',None))})
         ids=[x['message_id'] for x in out]
         existing={};jobs={}
         if ids:
@@ -142,30 +143,66 @@ class TelegramAccountService:
         return {'items':out,'next_offset_id':last if len(out)==limit else None,'account_id':self.account_id}
     async def thumbnail(self,channel_id,message_id):
         local=self.db.one('SELECT thumb_path FROM media WHERE account_id=? AND channel_id=? AND message_id=?',(self.account_id,int(channel_id),int(message_id)))
-        if local and local['thumb_path'] and Path(local['thumb_path']).is_file(): return Path(local['thumb_path'])
-        target=self.thumb_dir/str(self.account_id)/str(channel_id)/f'{message_id}.jpg'
+        fallback=Path(local['thumb_path']) if local and local['thumb_path'] else None
+        if fallback and not fallback.is_file(): fallback=None
+        # A new namespace prevents an old document thumbnail from masking a custom cover.
+        target=self.thumb_dir/'source-v2'/str(self.account_id)/str(channel_id)/f'{message_id}.jpg'
         if target.is_file() and target.stat().st_size: return target
-        key=(int(channel_id),int(message_id)); entry=self.thumbnail_locks.setdefault(key,[asyncio.Lock(),0])
+        key=(int(channel_id),int(message_id))
+        if fallback and time.monotonic()<self.thumbnail_backoff.get(key,0): return fallback
+        entry=self.thumbnail_locks.setdefault(key,[asyncio.Lock(),0])
         entry[1]+=1
         try:
             async with entry[0], self.thumbnail_gate:
                 if target.is_file() and target.stat().st_size: return target
-                async with asyncio.timeout(20):
-                    c=await self.get_client(); msg=self.video_messages.get(key)
-                    if msg is None:
-                        entity=await c.get_entity(int(channel_id)); msg=await c.get_messages(entity,ids=int(message_id))
-                    if not msg or not msg.video or not getattr(msg.video,'thumbs',None): return None
-                    target.parent.mkdir(parents=True,exist_ok=True); temp=target.with_suffix('.part')
-                    try:
-                        result=await c.download_media(msg.video,file=str(temp),thumb=-1)
-                        p=Path(result) if result else temp
-                        if p.is_file() and p.stat().st_size:
-                            os.replace(p,target); return target
-                    finally: temp.unlink(missing_ok=True)
+                if fallback and time.monotonic()<self.thumbnail_backoff.get(key,0): return fallback
+                try:
+                    async with asyncio.timeout(8 if fallback else 20):
+                        c=await self.get_client(); msg=self.video_messages.get(key)
+                        if msg is None:
+                            entity=await c.get_entity(int(channel_id)); msg=await c.get_messages(entity,ids=int(message_id))
+                        if msg and msg.video:
+                            cover=getattr(getattr(msg,'media',None),'video_cover',None)
+                            candidates=[(cover,getattr(cover,'sizes',None),'telegram-custom'),(msg.video,getattr(msg.video,'thumbs',None),'telegram-thumbnail')]
+                            for source,sizes,origin in candidates:
+                                static=[s for s in (sizes or []) if isinstance(s,(PhotoSize,PhotoCachedSize,PhotoStrippedSize,PhotoSizeProgressive))]
+                                if not static: continue
+                                # thumb=-1 may select an animated MP4. Explicitly request the largest still image.
+                                best=max(static,key=lambda s:(getattr(s,'w',0)*getattr(s,'h',0),getattr(s,'size',0)))
+                                target.parent.mkdir(parents=True,exist_ok=True); temp=target.with_suffix('.part')
+                                try:
+                                    result=await c.download_media(source,file=str(temp),thumb=best.type)
+                                    p=Path(result) if result else temp
+                                    if p.is_file() and p.stat().st_size:
+                                        await asyncio.to_thread(self._validate_cover,p)
+                                        os.replace(p,target);target.with_suffix('.source').write_text(origin,encoding='ascii');return target
+                                except asyncio.CancelledError: raise
+                                except Exception: pass  # A missing custom cover can still have a document thumbnail.
+                                finally: temp.unlink(missing_ok=True)
+                except asyncio.CancelledError: raise
+                except Exception:
+                    if not fallback: raise
+                if fallback:
+                    self.thumbnail_backoff[key]=time.monotonic()+45
+                    while len(self.thumbnail_backoff)>256:self.thumbnail_backoff.popitem(last=False)
+                    return fallback
         finally:
             entry[1]-=1
             if not entry[1]: self.thumbnail_locks.pop(key,None)
         return None
+    @staticmethod
+    def _validate_cover(path):
+        from PIL import Image
+        with Image.open(path) as image:
+            image.verify()
+            if image.format!='JPEG': raise ValueError('Telegram 封面不是静态 JPEG 图片')
+    @staticmethod
+    def thumbnail_origin(path):
+        marker=Path(path).with_suffix('.source')
+        if marker.is_file():
+            value=marker.read_text(encoding='ascii')
+            if value in ('telegram-custom','telegram-thumbnail'): return value
+        return 'local-frame'
     async def _entity(self,peer_id):
         c=await self.get_client()
         me=await self._me()

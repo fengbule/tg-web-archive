@@ -60,7 +60,7 @@ class Database:
                                       ('media','smooth_error',"TEXT NOT NULL DEFAULT ''"),('media','smooth_size','INTEGER NOT NULL DEFAULT 0'),
                                       ('media','original_hls_status',"TEXT NOT NULL DEFAULT 'pending'"),('media','original_hls_error',"TEXT NOT NULL DEFAULT ''"),
                                       ('media','preview_status',"TEXT NOT NULL DEFAULT 'pending'"),
-                                      ('outbox','telegram_message_id','INTEGER')]:
+                                      ('outbox','telegram_message_id','INTEGER'),('favorites','caption',"TEXT NOT NULL DEFAULT ''")]:
                 cols={x['name'] for x in c.execute(f'PRAGMA table_info({table})').fetchall()}
                 if column not in cols: c.execute(f'ALTER TABLE {table} ADD COLUMN {column} {decl}')
             if not c.execute('SELECT 1 FROM accounts LIMIT 1').fetchone():

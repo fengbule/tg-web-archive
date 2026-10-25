@@ -24,7 +24,7 @@
     if (hour < 18) return '下午好';
     return '晚上好';
   };
-  const thumbUrl = (x) => (x.thumb_path ? `/api/media/${x.id}/thumbnail` : '');
+  const thumbUrl = (x) => `/api/media/${x.id}/thumbnail?v=2`;
   const smoothReady = (x) => x && x.smooth_status === 'ready' && x.smooth_path;
   const smoothBusy = (x) => x && (x.smooth_status === 'queued' || x.smooth_status === 'processing');
   let libraryPlayback = [];
@@ -42,7 +42,7 @@
     return `<article class="card media-card-v2" data-media-id="${x.id}">
       <div class="media-poster">
         <div class="poster-fallback">${icon('film')}</div>
-        ${x.thumb_path ? `<img loading="lazy" src="${thumbUrl(x)}" alt="" onerror="this.remove()">` : ''}
+        <img loading="lazy" src="${thumbUrl(x)}" alt="Telegram 视频封面" onerror="this.remove()">
         <div class="poster-shade"></div>
         <div class="media-flags">${flags.join('')}</div>
         <span class="poster-duration">${duration(x.duration)}</span>
@@ -53,7 +53,8 @@
         </label>`}
       </div>
       <div class="media-card-body">
-        <div class="media-name" title="${esc(x.file_name)}">${esc(x.file_name)}</div>
+        <div class="media-name" title="${esc(mediaPresentation.title(x))}">${esc(mediaPresentation.title(x))}</div>
+        ${mediaPresentation.details(x)}
         <div class="media-sub">
           <span>${esc(x.channel_title || '未知来源')}</span><span class="dot"></span>
           <span>${fmt(x.size)}</span><span class="dot"></span>
@@ -257,7 +258,7 @@
     const contextRows = activePage === 'favorites' ? (window.favoritePlaybackRows || []) : activePage === 'library' ? libraryPlayback : null;
     modal(`<div class="video-modal player-shell" id="playerShell"><div class="player-viewport" id="playerViewport">
       <div class="player-top">
-        <div class="player-title"><span class="player-eyebrow">NOW PLAYING</span><h3>${esc(x.file_name)}</h3><p>${esc(x.channel_title)} · ${x.width} × ${x.height} · ${fmt(x.size)}</p></div>
+        <div class="player-title"><span class="player-eyebrow">NOW PLAYING</span><h3 title="${esc(x.file_name)}">${esc(mediaPresentation.title(x))}</h3><p>${esc(x.channel_title)} · ${x.width} × ${x.height} · ${fmt(x.size)}</p></div>
         <span class="lock-status" id="lockStatus" hidden></span>
         ${videoFavorites.button(x, 'ctl', 'playerFavorite')}
         <button class="quality-btn" id="qualityButton" data-lock-disable type="button" ${smooth ? '' : 'disabled'} title="切换原画 / 流畅版">${quality === 'smooth' ? '480P 流畅' : '原画'}</button>
@@ -394,7 +395,8 @@
         id = Number(target); x = item; playback = info;
         shell.dataset.mediaId = String(id);
         smooth = smoothReady(x); quality = 'original'; direct = false; firstLoad = true; saveAt = 0;
-        shell.querySelector('.player-title h3').textContent = x.file_name;
+        shell.querySelector('.player-title h3').textContent = mediaPresentation.title(x);
+        shell.querySelector('.player-title h3').title = x.file_name;
         $('#playerFavorite').outerHTML = videoFavorites.button(x, 'ctl', 'playerFavorite');
         shell.querySelector('.player-title p').textContent = `${x.channel_title} · ${x.width} × ${x.height} · ${fmt(x.size)}`;
         $('#totalTime').textContent = duration(x.duration);

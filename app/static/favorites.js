@@ -7,7 +7,7 @@
   const source = item => ({ account_id: Number(item.account_id || 1), channel_id: Number(item.channel_id),
     message_id: Number(item.message_id), file_name: item.file_name, channel_title: item.channel_title || '',
     size: Number(item.size || 0), duration: Number(item.duration || 0), width: Number(item.width || 0), height: Number(item.height || 0),
-    has_thumbnail: Boolean(item.has_thumbnail || item.thumb_path || item.local_thumbnail),
+    has_thumbnail: Boolean(item.has_thumbnail || item.thumb_path || item.local_thumbnail),caption:String(item.caption || '').slice(0,4096),
     ...(item.local_media_id || item.media_id || item.id ? { media_id: Number(item.local_media_id || item.media_id || item.id) } : {}) });
   function button(item, classes = 'icon-action', id = '') {
     const data = source(item), active = Boolean(item.is_favorite);
@@ -48,12 +48,12 @@
   function card(item) {
     const identity = key(item);
     if (item.downloaded) return `<div class="favorite-entry" data-favorite-entry="${identity}">${window.nebulaMediaCard({ ...item, id: item.media_id }, { select: false })}</div>`;
-    const cover = item.has_thumbnail ? `/api/channels/${item.channel_id}/videos/${item.message_id}/thumbnail?account_id=${item.account_id}` : '';
+    const cover = `/api/channels/${item.channel_id}/videos/${item.message_id}/thumbnail?account_id=${item.account_id}&v=2`;
     const labels = { queued: '排队中', downloading: '下载中', retrying: '等待续传', pausing: '暂停中', paused: '继续下载', failed: '重试下载', cancelled: '重新下载' };
     const busy = ['queued', 'downloading', 'retrying', 'pausing'].includes(item.download_status);
     return `<article class="card media-card-v2 favorite-entry" data-favorite-entry="${identity}">
       <div class="media-poster"><div class="poster-fallback">${icon('film')}</div>${cover ? `<img loading="lazy" src="${cover}" alt="" onerror="this.remove()">` : ''}<div class="poster-shade"></div><div class="media-flags"><span class="flag original">待下载</span></div><span class="poster-duration">${Math.floor(item.duration / 60)}:${String(Math.floor(item.duration % 60)).padStart(2, '0')}</span></div>
-      <div class="media-card-body"><div class="media-name" title="${esc(item.file_name)}">${esc(item.file_name)}</div><div class="media-sub"><span>${esc(item.channel_title || '未知来源')}</span><span class="dot"></span><span>${fmt(item.size)}</span></div><p class="favorite-account">${esc(item.account_label || '原账号已移除')} · ${date(item.created_at)}</p>
+      <div class="media-card-body"><div class="media-name" title="${esc(mediaPresentation.title(item))}">${esc(mediaPresentation.title(item))}</div>${mediaPresentation.details(item)}<div class="media-sub"><span>${esc(item.channel_title || '未知来源')}</span><span class="dot"></span><span>${fmt(item.size)}</span></div><p class="favorite-account">${esc(item.account_label || '原账号已移除')} · ${date(item.created_at)}</p>
       <div class="media-actions"><button type="button" data-favorite-download="${identity}" ${busy ? 'disabled' : ''}>${icon('download')} ${labels[item.download_status] || '下载到服务器'}</button>${button({ ...item, id: undefined })}</div></div></article>`;
   }
   async function load(current, append = false) {

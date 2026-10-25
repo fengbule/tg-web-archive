@@ -11,7 +11,7 @@ import bcrypt
 import uvicorn
 from cryptography.fernet import Fernet
 from telethon.errors import SessionPasswordNeededError
-from telethon.tl.types import Channel,ChatPhotoEmpty,DocumentAttributeVideo,DocumentAttributeFilename,User
+from telethon.tl.types import Channel,ChatPhotoEmpty,DocumentAttributeVideo,DocumentAttributeFilename,User,PhotoSize
 
 os.environ['DATA_ROOT']=tempfile.mkdtemp(prefix='tvm-accounts-ui-')
 os.environ['SESSION_SECRET']='disposable-browser-fixture-'*4
@@ -26,9 +26,11 @@ import app.telegram_service as telegram
 states={}; failures=set(); cover_failures=set()
 
 def video_message(mid):
-    return SimpleNamespace(id=mid,message='隔离测试素材 · 横竖屏均可挑选',date=datetime.now(timezone.utc),out=False,reply_to_msg_id=None,edit_date=None,video=SimpleNamespace(
+    caption=(f'山海之间 · 第 {mid} 集：把日常过成远方\n完整 TG 说明：沿海公路与午后的海风，保留原始文件名用于另存。' if mid in (60,58) else '隔离测试素材 · 横竖屏均可挑选')
+    custom=SimpleNamespace(id=mid,sizes=[PhotoSize('x',960,540,1000)]) if mid in (60,58) else None
+    return SimpleNamespace(id=mid,message=caption,media=SimpleNamespace(video_cover=custom),date=datetime.now(timezone.utc),out=False,reply_to_msg_id=None,edit_date=None,video=SimpleNamespace(
         id=mid,attributes=[DocumentAttributeVideo(duration=24,w=640,h=360),DocumentAttributeFilename(file_name=f'灵感片段 {mid:02d} · 原画.mp4')],
-        size=media.stat().st_size,thumbs=[] if mid==56 else [object()]))
+        size=media.stat().st_size,thumbs=[] if mid==56 else [PhotoSize('m',480,270,1000)]))
 
 class FakeQR:
     expires=datetime.now(timezone.utc)+timedelta(seconds=30)
@@ -68,7 +70,7 @@ class FakeClient:
     async def download_media(self,doc,file,thumb=None):
         if doc.id==57 and doc.id not in cover_failures:
             cover_failures.add(doc.id);raise ConnectionError('Fixture cover temporarily unavailable')
-        Path(file).write_bytes(cover.read_bytes());return file
+        Path(file).write_bytes((tg_cover if hasattr(doc,'sizes') else cover).read_bytes());return file
     async def iter_download(self,doc,offset=0,chunk_size=512*1024,**kwargs):
         data=media.read_bytes()
         for start in range(offset,len(data),chunk_size):
@@ -98,6 +100,13 @@ db.execute("INSERT INTO media(channel_id,message_id,channel_title,file_name,file
 cover=ROOT/'thumbnails'/'fixture.jpg'
 subprocess.run(['ffmpeg','-nostdin','-y','-v','error','-ss','4','-i',str(media),'-frames:v','1','-vf','scale=480:-2',str(cover)],check=True)
 db.execute('UPDATE media SET thumb_path=? WHERE id=1',(str(cover),))
+db.execute('UPDATE media SET caption=? WHERE id=1',(video_message(60).message,))
+from PIL import Image, ImageDraw
+tg_cover=ROOT/'thumbnails'/'original-tg-cover.jpg'
+image=Image.new('RGB',(960,540),'#163849');draw=ImageDraw.Draw(image)
+draw.rectangle((0,250,960,540),fill='#377d95');draw.polygon([(0,360),(500,270),(960,440),(960,540),(0,540)],fill='#74b7bb')
+draw.ellipse((670,55,790,175),fill='#f6d6a0');draw.text((54,60),'ORIGINAL TG COVER',fill='white',font_size=38)
+image.save(tg_cover,quality=95)
 for mid,status in [(59,'paused'),(55,'failed')]:
     db.execute('INSERT INTO downloads(channel_id,message_id,channel_title,file_name,total_bytes,status,created_at,updated_at) VALUES(1,?,?,?,?,?,?,?)',
         (mid,'创作收藏 · Studio',f'灵感片段 {mid:02d} · 原画.mp4',media.stat().st_size,status,now(),now()))

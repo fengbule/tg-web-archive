@@ -21,9 +21,9 @@ class Favorites:
             raise ValueError('缺少视频来源或名称，请刷新列表重试')
         values = (account, item['channel_id'], item['message_id'], item.get('channel_title', ''),
                   item['file_name'], item.get('size', 0), item.get('duration', 0),
-                  item.get('width', 0), item.get('height', 0), int(bool(item.get('has_thumbnail'))), now())
+                  item.get('width', 0), item.get('height', 0), int(bool(item.get('has_thumbnail'))), now(),item.get('caption',''))
         self.db.execute('''INSERT INTO favorites(account_id,channel_id,message_id,channel_title,file_name,
-            size,duration,width,height,has_thumbnail,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            size,duration,width,height,has_thumbnail,created_at,caption) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(account_id,channel_id,message_id) DO NOTHING''', values)
         return {'is_favorite': True, 'account_id': account, 'channel_id': item['channel_id'], 'message_id': item['message_id']}
 
@@ -46,8 +46,8 @@ class Favorites:
     def listing(self, q='', account_id=None, state='all', sort='recent', offset=0, limit=60):
         where, args = [], []
         if q:
-            where.append('(COALESCE(m.file_name,f.file_name) LIKE ? OR f.channel_title LIKE ?)')
-            args.extend(['%' + q + '%'] * 2)
+            where.append('(COALESCE(m.file_name,f.file_name) LIKE ? OR f.channel_title LIKE ? OR COALESCE(NULLIF(m.caption,\'\'),f.caption) LIKE ?)')
+            args.extend(['%' + q + '%'] * 3)
         if account_id is not None:
             where.append('f.account_id=?'); args.append(account_id)
         if state == 'downloaded':
@@ -65,7 +65,7 @@ class Favorites:
             COALESCE(m.file_name,f.file_name) AS file_name,f.channel_title,
             COALESCE(m.size,f.size) AS size,COALESCE(m.duration,f.duration) AS duration,
             COALESCE(m.width,f.width) AS width,COALESCE(m.height,f.height) AS height,
-            f.has_thumbnail,a.label AS account_label,m.id AS media_id,m.thumb_path,
+            f.has_thumbnail,COALESCE(NULLIF(m.caption,''),f.caption) AS caption,a.label AS account_label,m.id AS media_id,m.thumb_path,
             m.smooth_status,m.smooth_path,m.smooth_size,d.id AS download_id,d.status AS download_status
             ''' + joins + clause + ' ORDER BY ' + order + ' LIMIT ? OFFSET ?', [*args, limit, offset])
         for row in rows:

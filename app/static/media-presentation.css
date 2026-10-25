@@ -1,0 +1,10 @@
+.catalog-body label{align-items:flex-start;gap:11px}.catalog-body label input{margin-top:6px;flex:none}
+.catalog-body label b,.media-name{font-size:17px!important;font-weight:650!important;line-height:1.65!important;color:var(--text)!important;letter-spacing:.005em;overflow-wrap:anywhere;white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+.channel-thread .catalog-body{gap:10px;padding:18px}.media-file-name{font-size:11px!important;line-height:1.6;color:var(--muted);overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;margin:4px 0 0}
+.media-description{margin:8px 0 2px;min-width:0;border-top:1px solid var(--line);padding-top:4px;color:var(--text-2)}
+.media-description summary{cursor:pointer;min-height:44px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--client-accent,var(--brand));list-style:none;touch-action:manipulation}
+.media-description summary::-webkit-details-marker{display:none}.media-description summary::before{content:'＋';font-size:17px;flex:none}.media-description[open] summary::before{content:'−'}
+.media-description>p{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.85;margin:8px 0 12px;color:var(--text)}
+.media-description .media-source-file{font-size:11px;color:var(--muted)}.media-card-v2 .media-description{margin-top:10px}
+.media-poster img{object-fit:contain!important}.player-title h3{line-height:1.6;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+@media(max-width:600px){.catalog-body label b,.media-name{font-size:16px!important;-webkit-line-clamp:4}.channel-thread .catalog-body{padding:16px}.media-description summary{font-size:11px}}

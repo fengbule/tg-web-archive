@@ -81,3 +81,16 @@ def test_parallel_double_clicks_create_only_one_record(tmp_path):
     with ThreadPoolExecutor(max_workers=6) as pool: assert all(pool.map(save, range(12)))
     assert favorites.listing()['total'] == 1
     db.close()
+
+def test_caption_saved_searched_and_local_caption_preferred_without_renaming(tmp_path):
+    db,favorites=setup(tmp_path)
+    item={**source(),'caption':'原 TG 标题\n完整说明'}
+    favorites.add(item,1)
+    assert favorites.listing(q='TG 标题')['items'][0]['caption']==item['caption']
+    mid=media(db,tmp_path)
+    db.execute('UPDATE media SET caption=? WHERE id=?',('下载时的原始说明',mid))
+    row=favorites.listing(q='下载时')['items'][0]
+    assert row['caption']=='下载时的原始说明' and row['file_name']=='本地名称.mp4'
+    db.close();db=Database(tmp_path/'favorites.sqlite');db.init()
+    assert Favorites(db).listing()['items'][0]['caption']=='下载时的原始说明'
+    db.close()

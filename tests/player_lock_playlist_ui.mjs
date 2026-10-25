@@ -30,6 +30,7 @@ try {
   await page.locator('#app').waitFor({ state: 'visible' });
   await page.waitForFunction(async () => (await fetch('/api/media/1/playback').then(r => r.json())).status === 'ready');
   const fixture = await page.evaluate(() => fetch('/api/media/1').then(r => r.json()));
+  fixture.caption = ''; // This suite specifically exercises natural file-name ordering.
   const rows = [
     { ...fixture, id: 1, file_name: '样片 第1集.mp4', channel_id: 1, account_id: 1 },
     { ...fixture, id: 2, file_name: '样片 第2集.mp4', channel_id: 1, account_id: 1 },
