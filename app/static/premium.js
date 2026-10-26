@@ -329,12 +329,14 @@
         <button class="ghost" id="episodeRetry" type="button" hidden>重新读取列表</button><button class="ghost" id="episodeMore" type="button" hidden>显示更多</button>
       </section>
       <section id="realtimePanel" class="realtime-panel" data-lock-disable hidden role="dialog" aria-label="实时画质增强">
-        <div class="realtime-heading"><div><b>实时画质增强</b><span>边看边增强 · 不额外存片</span></div><button class="ctl" id="realtimeClose" type="button" aria-label="关闭增强设置">${icon('x')}</button></div>
+        <div class="realtime-heading"><div><b>实时画质增强 2.0</b><span>自适应锐化 · 不额外存片</span></div><button class="ctl" id="realtimeClose" type="button" aria-label="关闭增强设置">${icon('x')}</button></div>
         <div class="realtime-choices" role="group" aria-label="增强强度"><button type="button" data-realtime-mode="off" aria-pressed="true">关闭</button><button type="button" data-realtime-mode="natural" aria-pressed="false">自然</button><button type="button" data-realtime-mode="clear" aria-pressed="false">清晰</button><button type="button" data-realtime-mode="strong" aria-pressed="false">较强</button></div>
-        <button class="realtime-compare" id="realtimeCompare" type="button" disabled>按住看原画，松手恢复增强</button><p id="realtimeDetail" role="status"></p>
+        <label class="realtime-slider" for="realtimeStrength"><span>增强强度 <output id="realtimeStrengthValue">0%</output></span><input id="realtimeStrength" type="range" min="0" max="100" step="1" value="0"></label>
+        <div class="realtime-comparison-actions"><button class="realtime-compare" id="realtimeCompare" type="button" disabled>按住看原画</button><button class="realtime-compare" id="realtimeSplit" type="button" aria-pressed="false" disabled>左右对比</button></div>
+        <label class="realtime-slider" id="realtimeSplitControls" for="realtimeSplitPosition" hidden><span>对比位置 · 左原画 / 右增强</span><input id="realtimeSplitPosition" type="range" min="10" max="90" value="50"></label><p id="realtimeDetail" role="status"></p>
       </section>
       <div class="player-foot"><div class="player-meta"><span class="original-pill" id="metaQuality">${quality === 'smooth' ? '480P 流畅' : '原画 · 原始编码'}</span><span id="metaBitrate"></span><span>音画同步播放</span></div><div class="player-actions"><button class="ghost" id="smoothButton" type="button">${smooth ? '切换流畅版' : '生成流畅版'}</button><a id="originalDownloadLink" href="/api/media/${id}/stream?download=true" download>${icon('download')} 下载原文件</a></div></div>
-      <div class="realtime-summary" data-lock-disable><div><b>实时增强</b><span id="realtimeStatus" role="status">不额外存片 · 开启即生效</span></div><button id="realtimeOpen" class="ghost" type="button" aria-controls="realtimePanel">选择实时增强</button></div>
+      <div class="realtime-summary" data-lock-disable><div><b>实时增强</b><span id="realtimeStatus" role="status">不额外存片 · 开启即生效</span></div><div class="realtime-summary-actions"><button id="realtimeSplitQuick" class="ghost" type="button" aria-pressed="false" disabled>左右对比</button><button id="realtimeOpen" class="ghost" type="button" aria-controls="realtimePanel">开启增强</button></div></div>
       <details id="offlineEnhancement" class="offline-enhancement" data-lock-disable><summary>离线增强 · 另存一份，占用存储</summary><div class="enhancement-tools"><div class="enhancement-copy"><b>生成独立增强文件</b><span id="enhanceStatus" role="status">改善清晰度 · 原画保留</span></div><div class="enhancement-actions"><button class="ghost" id="enhanceButton" type="button">生成轻度增强版</button><button class="ghost" id="enhanceCancel" type="button" hidden>取消生成</button><a class="ghost" id="enhanceDownload" download hidden>下载增强版</a></div></div></details>
       <div class="player-error" id="playerError" role="status" hidden></div>
     </div></div>`, true);
@@ -349,7 +351,7 @@
     const controls = attachPlayerControls({ shell, stage, video, scrubbing: () => scrubber?.dragging(), interacting: () => queue?.isOpen() || realtime?.isOpen() });
     const locker = attachPlayerLock({ shell, button: $('#lockButton'), changed: locked => { if (locked) realtime?.close(); controls.show(); }, notice: toast });
     realtime = attachRealtimeEnhancement({shell, stage, video, changed: () => controls.show(), notice: toast});
-    if (preferred === 'realtime') { realtime.setMode('natural'); $('#realtimeButton').click(); }
+    if (preferred === 'realtime') { if ($('#realtimeCanvas').dataset.mode === 'off') realtime.setMode('clear'); $('#realtimeButton').click(); }
     let storyboard = createSeekPreview(id, $('#seekPreview'));
     const preview = (at, active = false) => {
       const d = Number(video.duration) || Number(x.duration) || 0;

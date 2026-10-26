@@ -55,6 +55,14 @@ try {
   await page.locator('#realtimeCompare').focus();await page.keyboard.down('Space');
   assert.equal(await page.locator('#realtimeCanvas').getAttribute('data-active'),'false');await page.keyboard.up('Space');await active(page);
   assert.ok(await page.locator('#player').evaluate(v=>v.paused&&Math.abs(v.currentTime-5)<.1),'keyboard comparison must not trigger the global pause shortcut');
+  await page.locator('#realtimeStrength').evaluate(e=>{e.value=82;e.dispatchEvent(new Event('input',{bubbles:true}))});
+  assert.equal(await page.locator('#realtimeStrengthValue').innerText(),'82%');
+  assert.equal(await page.locator('#realtimeCanvas').getAttribute('data-mode'),'custom');
+  await page.locator('#realtimeSplit').click();
+  assert.equal(await page.locator('#realtimeCanvas').getAttribute('data-split'),'true');
+  await page.locator('#realtimeSplitPosition').evaluate(e=>{e.value=30;e.dispatchEvent(new Event('input',{bubbles:true}))});
+  assert.ok(await page.locator('.realtime-frame-labels').evaluate(e=>!e.hidden&&e.style.getPropertyValue('--split')==='30%'));
+  await page.locator('#realtimeSplit').click();await page.locator('[data-realtime-mode=strong]').click();
   // No effect is applied to the downloadable file, nor is an enhancement task created.
   assert.ok(!(await page.locator('#downloadButton').getAttribute('href')).includes('quality=enhanced'));
   assert.equal((await page.evaluate(()=>fetch('/api/media/1/enhanced').then(r=>r.json()))).status,'idle');
@@ -100,6 +108,13 @@ try {
   await page.evaluate(()=>play(1));await active(page);
   assert.equal(await page.locator('#realtimeCanvas').getAttribute('data-mode'),'clear');
   assert.equal(await page.locator('#qualityButton').innerText(),'原画');
+  await page.locator('#realtimeStrength').evaluate(e=>{e.value=82;e.dispatchEvent(new Event('input',{bubbles:true}))});
+  await page.evaluate(()=>{pClosePlayer();play(1,'realtime')});await active(page);
+  assert.equal(await page.locator('#realtimeCanvas').getAttribute('data-mode'),'custom');
+  assert.equal(await page.locator('#realtimeCanvas').getAttribute('data-strength'),'0.82');
+  await page.locator('[data-realtime-mode=off]').click();await page.evaluate(()=>{pClosePlayer();play(1,'realtime')});await active(page);
+  assert.equal(await page.locator('#realtimeCanvas').getAttribute('data-mode'),'clear');
+  assert.equal(await page.locator('#realtimeCanvas').getAttribute('data-strength'),'0.7');
   await context.close();
   const unsupported=await browser.newContext();
   await unsupported.addInitScript(()=>{const get=HTMLCanvasElement.prototype.getContext;HTMLCanvasElement.prototype.getContext=function(kind,...args){return kind==='webgl'?null:get.call(this,kind,...args)}});
