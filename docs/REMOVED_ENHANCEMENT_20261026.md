@@ -41,3 +41,15 @@ curl -fsS http://127.0.0.1:8081/health
 ## 验证
 
 `tests/test_removed_enhancement.py` 模拟旧数据库 queued/processing 任务，检查重启后不会恢复或执行、源文件不变。API 冒烟检查旧接口关闭、旧画质参数拒绝、原画 Range/下载仍可用；`tests/enhancement_removed_ui.mjs` 从旧增强偏好启动，检查偏好清理、菜单和播放器无增强入口/画布/滤镜/后台请求、旧资源 404、原画播放/拖动和明暗主题布局。其他播放器、锁屏选集、封面及 API 检查使用独立合成数据，不写生产库。
+
+2026-10-26 已部署应用 `ba5a7dca567f`。隔离 Linux/真实 FFmpeg 下 **133 项 pytest、2 组 API 冒烟、5 组无头浏览器检查通过**，覆盖原画/HLS/Range、连续拖动和触摸快进、底部控件、横屏锁定与选集、原始消息/相册封面、增强移除和旧偏好清理。
+
+两台服务器构建/重启后健康，容器内前后端文件与发布源码一致，增强模块和资源不存在。VPS 既有 1 个授权账号、69 条媒体、69 条下载、1 条发件箱和 4 个收藏保留；InstaBox 的 1 个授权账号保留，生产媒体库为空，未植入测试视频。原始媒体路径/大小、账号/API/Session/密码指纹与其他配置（除 IMAGE_TAG）未变，SQLite 完整性为 ok。Akile、Komari、中转、birth 和其他已有容器指纹未变，外部保活未动。
+
+三个公网入口健康且静态资源匹配，已关闭的增强资源返回 404，旧增强接口 404/405。使用全新无头浏览器均显示原密码登录页，匿名/伪造会话访问账号、媒体和下载接口均为 401。VPS 及 HTTPS 中转使用已有真实影片验证原画播放、暂停和跳转，视频直接可见且无滤镜/增强画布/增强请求，媒体菜单不再包含增强。刷新已打开的旧页面即可加载本次移除。
+
+- VPS：<http://84.54.3.25:8080>。
+- VPS HTTPS 中转：<https://8084-agqv47q5at4mzg6nr336pvg33u.instabox.tech>。
+- InstaBox：<https://8081-agqv47q5at4mzg6nr336pvg33u.instabox.tech>。
+
+测试证据保存在操作者受保护的 `output/tg-web-archive/unenhanced-20261026/tests.log` 与 `unenhanced-release-report.json`，服务器备份目录内有构建/健康及记录核验结果。本次仅文档收尾的后续提交无需再次重建应用；运行应用版本仍为上述 `ba5a7dca567f`。
