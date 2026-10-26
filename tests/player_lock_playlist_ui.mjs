@@ -5,7 +5,7 @@ const url = process.env.TEST_URL || 'http://127.0.0.1:8082';
 const output = process.env.TEST_OUTPUT || '/data/workspace/tg-web-archive-e2e';
 await fs.mkdir(output, { recursive: true });
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', headless: true,
-  args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--autoplay-policy=no-user-gesture-required'] });
+  args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
 try {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
   await context.addInitScript(() => {
@@ -63,8 +63,6 @@ try {
     await page.waitForFunction(() => document.querySelector('#player')?.currentTime > .1);
     await page.waitForFunction(() => !document.querySelector('#nextEpisode').disabled);
     await page.locator('#player').evaluate(video => { video.loop = true; });
-    await page.evaluate(() => {document.querySelector('[data-realtime-mode=natural]').click();document.querySelector('#realtimeClose').click();});
-    await page.waitForFunction(() => document.querySelector('#realtimeCanvas')?.dataset.active === 'true');
   };
   const reveal = async () => {
     if (await page.locator('#playerShell').evaluate(shell => shell.classList.contains('controls-hidden'))) await page.locator('#player').tap();
@@ -72,7 +70,6 @@ try {
   const waitEpisode = async id => {
     await page.waitForFunction(value => document.querySelector('#playerShell')?.dataset.mediaId === String(value)
       && document.querySelector('#player')?.readyState >= 2, id);
-    await page.waitForFunction(() => document.querySelector('#realtimeCanvas')?.dataset.active === 'true');
   };
   await open();
   await page.evaluate(() => { window.__video = document.querySelector('#player'); window.__shell = document.querySelector('#playerShell'); });

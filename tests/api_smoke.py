@@ -91,6 +91,10 @@ with TestClient(app) as c:
     assert c.delete(f'/api/accounts/{aid}').status_code==200 and len(c.get('/api/accounts').json())==1
     media=root/'media'/'1'; media.mkdir(parents=True); f=media/'1_test.mp4'; f.write_bytes(b'0123456789')
     cur=db.execute("insert into media(channel_id,message_id,channel_title,file_name,file_path,size,downloaded_at) values(1,1,'测试','test.mp4',?,10,'now')",(str(f),)); mid=cur.lastrowid
+    for method in ('GET','POST','DELETE'):
+        assert c.request(method,f'/api/media/{mid}/enhanced').status_code in (404,405)
+    for quality in ('enhanced','unknown'):
+        assert c.get(f'/api/media/{mid}/stream?quality={quality}').status_code==400
     playback=c.get(f'/api/media/{mid}/playback').json()
     assert playback['original']['type']=='file'
     assert c.get(f'/api/media/{mid}/hls/v2/index.m3u8').status_code==404

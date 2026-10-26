@@ -60,9 +60,6 @@ class Database:
                                       ('media','smooth_error',"TEXT NOT NULL DEFAULT ''"),('media','smooth_size','INTEGER NOT NULL DEFAULT 0'),
                                       ('media','original_hls_status',"TEXT NOT NULL DEFAULT 'pending'"),('media','original_hls_error',"TEXT NOT NULL DEFAULT ''"),
                                       ('media','preview_status',"TEXT NOT NULL DEFAULT 'pending'"),
-                                      ('media','enhanced_path',"TEXT NOT NULL DEFAULT ''"),('media','enhanced_status',"TEXT NOT NULL DEFAULT 'idle'"),
-                                      ('media','enhanced_progress','REAL NOT NULL DEFAULT 0'),('media','enhanced_error',"TEXT NOT NULL DEFAULT ''"),
-                                      ('media','enhanced_size','INTEGER NOT NULL DEFAULT 0'),('media','enhanced_recipe',"TEXT NOT NULL DEFAULT ''"),
                                       ('outbox','telegram_message_id','INTEGER'),('favorites','caption',"TEXT NOT NULL DEFAULT ''")]:
                 cols={x['name'] for x in c.execute(f'PRAGMA table_info({table})').fetchall()}
                 if column not in cols: c.execute(f'ALTER TABLE {table} ADD COLUMN {column} {decl}')
