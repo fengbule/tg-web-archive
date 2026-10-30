@@ -17,6 +17,7 @@ from .zipstream import zip_media_files
 from .account_backup import collect_accounts, encrypt_backup, decrypt_backup, restore_accounts, MAX_BACKUP_BYTES
 from .favorites import Favorites
 from .cover_refresh import CoverRefresh
+from .client_routes import install_client_routes
 from typing import Literal
 
 logging.basicConfig(level=os.getenv('LOG_LEVEL','INFO'),format='%(asctime)s %(levelname)s %(name)s %(message)s')
@@ -52,6 +53,7 @@ async def lifespan(app):
     await cover_refresh.stop(); await outbox.stop(); await transcoder.stop(); await downloader.stop()
     await tg.disconnect_all()
 app=FastAPI(title='Telegram 视频管理器',lifespan=lifespan,docs_url=None,redoc_url=None)
+install_client_routes(app,tg)
 
 def config_value(key:str):
     row=db.one('SELECT value FROM config WHERE key=?',(key,)); return row['value'] if row else None
@@ -394,16 +396,21 @@ def remove_favorite(account_id:int,channel_id:int,message_id:int):
 class OutboxCreate(BaseModel):
     peer_id:int
     media_id:int
+    account_id:int|None=Field(default=None,gt=0)
     caption:str=Field(default='',max_length=1024)
 @app.post('/api/outbox')
 def create_outbox(b:OutboxCreate):
-    try: job_id=outbox.enqueue(tg.active_id,b.peer_id,b.media_id,b.caption)
+    try:
+        service=tg.service(b.account_id)
+        job_id=outbox.enqueue(service.account_id,b.peer_id,b.media_id,b.caption)
     except ValueError as e: raise HTTPException(400,str(e))
     return {'id':job_id,'status':'queued'}
 @app.get('/api/outbox')
-def list_outbox(peer_id:int|None=None):
-    if peer_id is None: return db.all('SELECT * FROM outbox WHERE account_id=? ORDER BY id DESC LIMIT 100',(tg.active_id,))
-    return db.all('SELECT * FROM outbox WHERE account_id=? AND peer_id=? ORDER BY id DESC LIMIT 100',(tg.active_id,peer_id))
+def list_outbox(peer_id:int|None=None,account_id:int|None=Query(default=None,gt=0)):
+    try: aid=tg.service(account_id).account_id
+    except ValueError: raise HTTPException(404,'Telegram 账号不存在') from None
+    if peer_id is None: return db.all('SELECT * FROM outbox WHERE account_id=? ORDER BY id DESC LIMIT 100',(aid,))
+    return db.all('SELECT * FROM outbox WHERE account_id=? AND peer_id=? ORDER BY id DESC LIMIT 100',(aid,peer_id))
 @app.post('/api/outbox/{id}/cancel')
 def cancel_outbox(id:int):
     if not outbox.cancel(id): raise HTTPException(404,'发送任务不存在')

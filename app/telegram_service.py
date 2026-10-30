@@ -10,10 +10,11 @@ from telethon.tl.functions.messages import ImportChatInviteRequest
 from telethon.tl.types import InputMessagesFilterVideo
 from .db import now
 from .qr_login import QRLoginFlow
+from .client_service import ClientActions
 
 log=logging.getLogger('tvm.telegram')
 
-class TelegramAccountService:
+class TelegramAccountService(ClientActions):
     def __init__(self,account_id:int,session_name:str,session_dir:Path,thumb_dir:Path,db,cipher):
         self.account_id=account_id; self.session_name=session_name; self.session_dir=session_dir; self.thumb_dir=thumb_dir
         self.db=db; self.cipher=cipher; self.client=None; self.phone=''; self.phone_code_hash=''; self.lock=asyncio.Lock(); self.channels_cache=[]; self.channels_cached_at=0; self.me_cache=None

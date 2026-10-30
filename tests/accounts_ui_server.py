@@ -63,7 +63,13 @@ class FakeClient:
     async def iter_dialogs(self,*args,**kwargs):
         entity=Channel(id=1,title='创作收藏 · Studio',photo=ChatPhotoEmpty(),date=datetime.now(timezone.utc))
         yield SimpleNamespace(entity=entity,name=entity.title,id=-1000000000001,unread_count=0,pinned=False,folder_id=None,message=None,date=entity.date)
-    async def get_entity(self,*args): return SimpleNamespace(title='创作收藏 · Studio')
+    async def get_entity(self,*args):
+        if args and args[0]==-1000000000001:return Channel(id=1,title='创作收藏 · Studio',photo=ChatPhotoEmpty(),date=datetime.now(timezone.utc))
+        return SimpleNamespace(title='创作收藏 · Studio')
+    async def get_input_entity(self,entity):
+        from telethon.tl.types import InputPeerChannel
+        return InputPeerChannel(1,123)
+    async def __call__(self,request):return SimpleNamespace(mute_until=None)
     async def get_messages(self,entity,ids):
         def message(mid):
             if mid==61:return SimpleNamespace(id=61,grouped_id=900,photo=SimpleNamespace(id=61,sizes=[PhotoSize('x',1280,720,1000)]),video=None)

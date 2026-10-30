@@ -85,11 +85,11 @@ try {
   await mode('auto');await page.setViewportSize({width:390,height:844});
   assert.equal(await page.locator('html').getAttribute('data-layout'),'phone');
   await page.locator('#menu').click();assert.ok(await page.locator('#app > aside').isVisible());
-  await page.locator('#app > aside [data-page=messages]').click();await page.locator('.dialog-item').first().click();
-  assert.ok(await page.locator('.conversation-pane').isVisible());assert.ok(!await page.locator('.dialog-pane').isVisible());
-  await page.locator('.chat-back').click();assert.ok(await page.locator('.dialog-pane').isVisible());
+  await page.locator('#app > aside [data-page=messages]').click();await page.locator('.tg-dialog').first().click();
+  assert.ok(await page.locator('.tg-conversation').isVisible());assert.ok(!await page.locator('.tg-sidebar').isVisible());
+  await page.locator('#tgBack').click();assert.ok(await page.locator('.tg-sidebar').isVisible());
   await page.setViewportSize({width:1024,height:1000});await mode('tablet');
-  assert.ok(await page.locator('.dialog-pane').isVisible());assert.ok(await page.locator('.conversation-pane').isVisible());
+  assert.ok(await page.locator('.tg-sidebar').isVisible());assert.ok(await page.locator('.tg-conversation').isVisible());
   assert.deepEqual(errors,[]);
   console.log('CLIENT_VIEW_UI=PASS (3 explicit modes/auto, 40 theme-size combinations, persistence, keyboard, channel split/back/search/selection, live player continuity, server queue/file, real browser save, messages)');
 } finally {await browser.close();}
