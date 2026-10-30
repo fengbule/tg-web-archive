@@ -41,6 +41,16 @@ git fetch origin && git merge --ff-only origin/main
 export IMAGE_TAG="$(git rev-parse --short=12 HEAD)"
 docker compose -p tg-web-archive -f docker-compose.instabox.yml build app
 docker compose -p tg-web-archive -f docker-compose.instabox.yml up -d --no-deps --force-recreate --wait app
+python3 - <<'PY'
+import os, tempfile
+from pathlib import Path
+p=Path('.env')
+lines=[line for line in p.read_text().splitlines() if not line.startswith('IMAGE_TAG=')]
+lines.append('IMAGE_TAG='+os.environ['IMAGE_TAG'])
+with tempfile.NamedTemporaryFile(mode='w',dir=p.parent,delete=False) as f:
+    f.write('\n'.join(lines)+'\n'); f.flush(); os.fsync(f.fileno())
+os.replace(f.name,p)
+PY
 docker compose -p tg-web-archive -f docker-compose.instabox.yml restart nginx
 curl -fsS http://127.0.0.1:8081/health
 ```
@@ -50,3 +60,17 @@ curl -fsS http://127.0.0.1:8081/health
 ## 验证方式
 
 `tests/test_telegram_client.py` 使用真实 Telethon 请求类型的模拟客户端检查频道权限、分页游标、账号隔离、纯文本回复、重复点击、编辑归属、置顶/静音/归档/已读/退出及邀请审批。`tests/client_api_smoke.py` 检查匿名拒绝、必填账号、校验、限流/权限映射和上传账号隔离。`tests/telegram_client_ui.mjs` 在无头浏览器使用合成消息验证操作、草稿、转义、迟到响应和多种屏幕/明暗布局；这些操作不会向真实联系人发送消息或退出真实频道。
+
+## 本次发布记录
+
+应用源码版本 `943e77b6ff58`。147 项 Linux pytest、3 组 API 和 7 组无头浏览器回归通过；最终公开频道加入后成员状态更新另用 14 项同机客户端单元测试复核通过。合成素材的手机暗色和电脑亮色界面截图已目检；原画播放/拖动、锁屏选集、封面、手机/平板/电脑视图、本机附件下载、服务器下载和增强移除回归通过。私有日志位于操作者 `output/tg-web-archive/client-20261030/`。
+
+VPS 正常 Compose 构建。InstaBox 首次构建遭 Docker Hub 429，原应用保持运行；核对 `git diff d447742 HEAD -- Dockerfile requirements.txt` 无差异后，用本机已保存的 `tg-web-archive-app:ba5a7dca567f`（相同依赖）作基础，仅复制最新 `app` 构建新镜像，未升级依赖。复现用备份目录内的 `Dockerfile.local-base` 执行 `docker build --pull=false -f backups/tg-web-archive-client-20261030T124527Z/Dockerfile.local-base -t tg-web-archive-app:943e77b6ff58 .`，随后执行上述仅替换 app、同步 IMAGE_TAG、重启本项目 nginx 的步骤。此办法仅适用于依赖与基础版本一致的发布；成功记录在 `deploy-offline.log`，unit 为 `tg-web-archive-client-offline-20261030`。
+
+两台运行容器的前后端文件均与发布源码逐字节一致且健康。VPS 1 个授权账号、74 条媒体、74 条下载、1 条发件箱、5 个收藏及原文件大小保持；InstaBox 1 个授权账号保留，本地生产媒体库为空。密码/API/Session 指纹、其他配置与无关服务未变，SQLite 检查 ok。回滚只替换代码/镜像，不能用旧数据库覆盖这些记录。
+
+三个公网入口已核对静态资源、真实 Telegram 会话列表/少量频道历史/权限、手机界面选择/工具/返回，全部通过；匿名和伪造会话被拒绝，新浏览器仍需原密码。VPS 原视频 Range 206 正常。真实验证仅做读取，没有发送消息、加入/退出频道、标已读或修改 Telegram 设置；写操作由上述隔离测试验证。应用已构建版本保持 `943e77b6ff58`，文档收尾提交不再重建应用。
+
+- VPS：<http://84.54.3.25:8080>。
+- HTTPS 中转：<https://8084-agqv47q5at4mzg6nr336pvg33u.instabox.tech>。
+- InstaBox：<https://8081-agqv47q5at4mzg6nr336pvg33u.instabox.tech>。
